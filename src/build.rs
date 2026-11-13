@@ -400,6 +400,11 @@ pub struct AppSettings {
     /// Left drag on empty canvas draws a selection box instead of panning.
     #[serde(default)]
     pub left_drag_selects: bool,
+    /// Recently placed block ids (newest first).
+    #[serde(default)]
+    pub recent_blocks: Vec<String>,
+    #[serde(default)]
+    pub favorite_blocks: Vec<String>,
 }
 
 impl Default for AppSettings {
@@ -411,6 +416,8 @@ impl Default for AppSettings {
             ui_scale: 1.0,
             onboarded: false,
             left_drag_selects: false,
+            recent_blocks: vec![],
+            favorite_blocks: vec![],
         }
     }
 }

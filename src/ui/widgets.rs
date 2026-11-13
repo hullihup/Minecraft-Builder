@@ -108,8 +108,8 @@ pub fn field_editor(
                     ui.separator();
                     if models.is_empty() {
                         ui.label(egui::RichText::new(t(
-                            "Kein Resourcepack hinzugefügt. Füge eins unter „Ressourcen“ (🎨) in der Seitenleiste hinzu.",
-                            "No resource pack added. Add one under “Resources” (🎨) in the sidebar.",
+                            "Kein Resourcepack hinzugefügt. Füge eins unter „Texturen & Modelle“ in der Seitenleiste hinzu.",
+                            "No resource pack added. Add one under “Textures & models” in the sidebar.",
                         )).size(11.0).color(theme::TEXT_WEAK));
                     }
                     ui.selectable_value(&mut v, String::new(), t("(kein eigenes Modell)", "(no custom model)"));

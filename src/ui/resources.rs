@@ -82,7 +82,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
     let info = app.pack.info.clone();
     match &info {
         Some(Err(e)) => {
-            ui.label(RichText::new(format!("⚠ {e}")).color(theme::RED));
+            ui.label(RichText::new(e.to_string()).color(theme::RED));
             ui.label(
                 RichText::new(app.pack.path.display().to_string())
                     .size(11.0)
@@ -217,7 +217,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
         for m in &i.item_models {
             let auto = i.generated.contains(m);
             let r = ui.horizontal(|ui| {
-                ui.label(RichText::new("◆").color(crate::blocks::Cat::Resources.color()));
+                crate::ui::icons::icon(ui, crate::ui::icons::Icon::Box, 13.0, crate::blocks::Cat::Resources.color());
                 ui.label(RichText::new(m).monospace().size(12.0));
                 if auto {
                     ui.label(RichText::new("auto").size(10.0).color(theme::TEXT_WEAK)).on_hover_text(t(

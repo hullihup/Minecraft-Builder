@@ -224,6 +224,7 @@ pub fn new_project(name: &str, platform: Platform, starter: Starter) -> Project 
             b.flow(heal, m2);
         }
     }
+    p.migrate_commands();
     p
 }
 
@@ -291,13 +292,13 @@ pub fn all_blocks_project(platform: Platform) -> Project {
             .iter()
             .filter(|o| o.ty == PinType::Exec && o.id != "next")
         {
-            let l = b.node("log", x, 300.0, &[("text", o.id)]);
-            b.link(n, o.id, l, "in");
+            let l = b.node("log", x, 300.0, &[("text", &o.id)]);
+            b.link(n, &o.id, l, "in");
             // Use loop/action outputs inside the branch.
             for out in d.outputs.iter().filter(|o| o.ty != PinType::Exec) {
                 let l2 = b.node("log", x, 500.0, &[]);
                 b.link(l, "next", l2, "in");
-                b.link(n, out.id, l2, "text");
+                b.link(n, &out.id, l2, "text");
             }
         }
         if d.outputs
@@ -319,7 +320,7 @@ pub fn all_blocks_project(platform: Platform) -> Project {
             let l = b.node("log", x, 0.0, &[]);
             x += 300.0;
             b.link(last.0, last.1, l, "in");
-            b.link(n, o.id, l, "text");
+            b.link(n, &o.id, l, "text");
             last = (l, "next");
         }
     }
@@ -339,7 +340,7 @@ pub fn all_blocks_project(platform: Platform) -> Project {
             let l = b.node("log", x, y, &[]);
             x += 300.0;
             b.link(last.0, last.1, l, "in");
-            b.link(ev, o.id, l, "text");
+            b.link(ev, &o.id, l, "text");
             last = (l, "next");
         }
         if d.code(platform).map(|c| c.cancellable).unwrap_or(false) {
@@ -356,6 +357,46 @@ pub fn all_blocks_project(platform: Platform) -> Project {
         }
         y += 400.0;
     }
-    // A "stop" inside the timer.
+    p.migrate_commands();
+
+    // A command that uses every option type.
+    use crate::model::{CmdAccess, CmdOption, CmdSenders, CommandDef, OptType};
+    let cid = p.alloc_id();
+    let mut c = CommandDef::new(cid, "testopts");
+    c.description = "Alle Optionstypen".into();
+    c.aliases = vec!["topts".into()];
+    c.access = CmdAccess::Permission;
+    c.permission = "alle.testopts".into();
+    c.senders = CmdSenders::Everyone;
+    let opt = |name: &str, ty: OptType, required: bool, choices: &[&str]| CmdOption {
+        name: name.into(),
+        description: format!("Beschreibung von {name}"),
+        ty,
+        required,
+        choices: choices.iter().map(|x| x.to_string()).collect(),
+    };
+    c.options = vec![
+        opt("wort", OptType::Word, true, &["eins", "zwei"]),
+        opt("zahl", OptType::Number, true, &[]),
+        opt("ziel", OptType::Player, false, &[]),
+        opt("an", OptType::Bool, false, &[]),
+        opt("modus", OptType::Choice, false, &["leicht", "schwer"]),
+        opt("ganz", OptType::Integer, false, &[]),
+        opt("rest", OptType::Text, false, &[]),
+    ];
+    let n_opts = c.options.len();
+    p.commands.push(c);
+    let mut b = Builder { p: &mut p, ws: 0 };
+    let cid_s = cid.to_string();
+    let ev = b.node("ev_command", 0.0, y, &[("cmd", cid_s.as_str())]);
+    let mut last = (ev, "next".to_string());
+    let mut x = 300.0;
+    for i in 0..n_opts {
+        let l = b.node("log", x, y, &[]);
+        x += 300.0;
+        b.link(last.0, &last.1, l, "in");
+        b.link(ev, &crate::model::opt_pin(i), l, "text");
+        last = (l, "next".into());
+    }
     p
 }

@@ -1,7 +1,7 @@
 //! Turns a project (block graphs) into a complete Gradle project with Java code.
 
 use crate::blocks::{self, BlockDef, FieldKind, Kind, PinType, Special};
-use crate::model::{Node, NodeId, Platform, Project, Workspace};
+use crate::model::{CmdAccess, CmdSenders, Node, NodeId, OptType, Platform, Project, Workspace};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -141,6 +141,7 @@ struct Gen<'a> {
     imports: BTreeSet<String>,
     ws_idx: usize,
     ws: &'a Workspace,
+    proj: &'a Project,
     /// Nodes that ended up in generated code.
     reached: HashSet<NodeId>,
     reported: HashSet<(NodeId, String)>,
@@ -387,8 +388,9 @@ impl<'a> Gen<'a> {
         let ws = self.ws;
         if let Some(link) = ws.link_into(node.id, pin) {
             if let Some(src) = ws.node(link.from.node) {
-                if let Some(sdef) = blocks::get(&src.kind) {
-                    if let Some(sp) = sdef.output(&link.from.pin) {
+                if let Some(shape) = blocks::shape(src, self.proj) {
+                    let sdef = shape.def;
+                    if let Some(sp) = shape.output(&link.from.pin) {
                         let from_ty = sp.ty;
                         let raw = self.output_expr(src, sdef, &link.from.pin, scope, 0);
                         return match raw {
@@ -420,7 +422,7 @@ impl<'a> Gen<'a> {
                 {
                     self.err(
                         node.id,
-                        format!("Eingang „{}“ ist nicht verbunden", pd.label.0),
+                        format!("Eingang „{}“ ist nicht verbunden", pd.label.de()),
                     );
                 }
                 "null".into()
@@ -454,7 +456,7 @@ impl<'a> Gen<'a> {
                 src.id,
                 format!(
                     "Der Wert „{}“ wird an einer Stelle benutzt, an der „{}“ noch nicht gelaufen ist (anderer Ablauf?)",
-                    sdef.output(pin).map(|p| p.label.0).unwrap_or(pin),
+                    sdef.output(pin).map(|p| p.label.de().to_string()).unwrap_or_else(|| pin.to_string()),
                     sdef.name.0
                 ),
             );
@@ -484,8 +486,19 @@ impl<'a> Gen<'a> {
         scope: &mut Scope,
         exprs: &[(&str, String)],
     ) -> Vec<String> {
+        let outs = def.outputs.clone();
+        self.event_vars_pins(node, &outs, scope, exprs)
+    }
+
+    fn event_vars_pins(
+        &mut self,
+        node: &Node,
+        outputs: &[blocks::PinDef],
+        scope: &mut Scope,
+        exprs: &[(&str, String)],
+    ) -> Vec<String> {
         let mut lines = vec![];
-        for o in def.outputs.iter().filter(|o| o.ty != PinType::Exec) {
+        for o in outputs.iter().filter(|o| o.ty != PinType::Exec) {
             let Some((_, e)) = exprs.iter().find(|(p, _)| *p == o.id) else {
                 continue;
             };
@@ -517,6 +530,7 @@ struct CmdInfo {
     permission: Option<String>,
     /// Generated permission that defaults to OP.
     op_default: bool,
+    usage: String,
 }
 
 /// Comma/space separated list -> cleaned items.
@@ -632,24 +646,31 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                 }
             }
             Special::Command => {
-                let name = clean_command(value_of(ev, "name", "hallo"));
+                let Some(cmd) = g.proj.node_command(ev).cloned() else {
+                    g.err(ev.id, "Dieser Befehl-Block gehört zu keinem Befehl – wähle ihn im Befehle-Fenster neu aus".into());
+                    continue;
+                };
+                let name = clean_command(&cmd.name);
                 if name.is_empty() {
                     g.err(ev.id, "Der Befehl braucht einen Namen".into());
                     continue;
                 }
                 if let Some(other) = seen_cmds.get(&name) {
                     if *other != ev.id {
-                        g.err(ev.id, format!("Den Befehl /{name} gibt es doppelt"));
+                        g.err(
+                            ev.id,
+                            format!(
+                                "Für /{name} gibt es mehrere Blöcke oder einen gleichnamigen Alias"
+                            ),
+                        );
                         continue;
                     }
                 }
                 seen_cmds.insert(name.clone(), ev.id);
-                let desc = value_of(ev, "description", "").to_string();
-                let op = value_of(ev, "op", "false") == "true";
-                let players_only = value_of(ev, "players_only", "true") == "true";
-                let aliases: Vec<String> = split_list(value_of(ev, "aliases", ""))
-                    .into_iter()
-                    .map(|a| clean_command(&a))
+                let aliases: Vec<String> = cmd
+                    .aliases
+                    .iter()
+                    .map(|a| clean_command(a))
                     .filter(|a| !a.is_empty() && *a != name)
                     .collect();
                 for a in &aliases {
@@ -660,25 +681,58 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                     }
                     seen_cmds.insert(a.clone(), ev.id);
                 }
-                let custom_perm = value_of(ev, "permission", "").trim().to_string();
-                let min_args = value_of(ev, "min_args", "0")
-                    .trim()
-                    .replace(',', ".")
-                    .parse::<f64>()
-                    .unwrap_or(0.0)
-                    .max(0.0) as usize;
-                let usage = value_of(ev, "usage", "&cBenutzung: /<befehl> <argument>")
-                    .replace("<befehl>", &name)
-                    .replace("<command>", &name);
-                let suggestions = split_list(value_of(ev, "suggest", ""));
-                let suggest_array = format!(
-                    "new String[] {{ {} }}",
-                    suggestions
-                        .iter()
-                        .map(|x| java_str(x))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
+                // Option checks.
+                let mut seen_optional = false;
+                for (i, o) in cmd.options.iter().enumerate() {
+                    if o.name.trim().is_empty() {
+                        g.err(ev.id, format!("Option {} braucht einen Namen", i + 1));
+                    }
+                    if o.required && seen_optional {
+                        g.err(
+                            ev.id,
+                            format!("Pflicht-Option „{}“ muss vor den optionalen stehen", o.name),
+                        );
+                    }
+                    seen_optional |= !o.required;
+                    if o.ty == OptType::Text && i + 1 != cmd.options.len() {
+                        g.err(
+                            ev.id,
+                            format!(
+                                "„{}“ (Text bis zum Ende) muss die letzte Option sein",
+                                o.name
+                            ),
+                        );
+                    }
+                    if o.ty == OptType::Choice && o.choices.is_empty() {
+                        g.err(ev.id, format!("Die Auswahl „{}“ braucht Werte", o.name));
+                    }
+                }
+                let de = crate::i18n::is_german();
+                let op = cmd.access == CmdAccess::Op;
+                let custom_perm = if cmd.access == CmdAccess::Permission {
+                    cmd.permission.trim().to_string()
+                } else {
+                    String::new()
+                };
+                if cmd.access == CmdAccess::Permission && custom_perm.is_empty() {
+                    g.err(
+                        ev.id,
+                        "Gib eine Berechtigung ein (z. B. meinplugin.heal) oder wähle „Alle“"
+                            .into(),
+                    );
+                }
+                let players_only = cmd.senders == CmdSenders::Players;
+                let usage = cmd.usage();
+                let plat = g.p;
+                let fail = |msg: String| match plat {
+                    Platform::Paper => format!(
+                        "{{ sender.sendMessage(Util.color({})); return true; }}",
+                        msg
+                    ),
+                    Platform::Fabric => {
+                        format!("{{ source.sendFailure(Util.color({})); return 0; }}", msg)
+                    }
+                };
                 let ret = match g.p {
                     Platform::Paper => "return true;",
                     Platform::Fabric => "return 1;",
@@ -690,45 +744,138 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                     }
                     Platform::Fabric => "source.getPlayer()".to_string(),
                 };
-                let exprs = vec![
-                    ("player", player_expr),
-                    ("arg1", "Util.arg(args, 0)".to_string()),
-                    ("arg2", "Util.arg(args, 1)".to_string()),
-                    ("arg3", "Util.arg(args, 2)".to_string()),
-                    ("args", "String.join(\" \", args)".to_string()),
-                    ("argc", "args.length".to_string()),
-                ];
-                let mut pre = g.event_vars(ev, def, &mut sc, &exprs);
+                let mut exprs: Vec<(String, String)> = vec![("player".into(), player_expr)];
+                let mut checks: Vec<String> = vec![];
+                let required = cmd.options.iter().filter(|o| o.required).count();
+                if required > 0 {
+                    let msg = java_str(&format!(
+                        "&c{}: {usage}",
+                        if de { "Benutzung" } else { "Usage" }
+                    ));
+                    checks.push(format!("if (args.length < {required}) {}", fail(msg)));
+                }
+                let mut tab: Vec<String> = vec![];
+                for (i, o) in cmd.options.iter().enumerate() {
+                    let pin = crate::model::opt_pin(i);
+                    let var = format!("v{}_{}", ev.id, pin);
+                    let arg = format!("Util.arg(args, {i})");
+                    let oname = java_str(&o.name);
+                    let expr = match o.ty {
+                        OptType::Word | OptType::Choice => arg.clone(),
+                        OptType::Text => format!("Util.rest(args, {i})"),
+                        OptType::Number => format!("Util.num({arg})"),
+                        OptType::Integer => format!("Math.floor(Util.num({arg}))"),
+                        OptType::Player => format!("Util.findPlayer({arg})"),
+                        OptType::Bool => format!("Util.bool({arg})"),
+                    };
+                    exprs.push((pin.clone(), expr));
+                    let given = format!("args.length > {i}");
+                    match o.ty {
+                        OptType::Number => checks.push(format!(
+                            "if ({given} && !Util.isNum(args[{i}])) {}",
+                            fail(format!(
+                                "\"&c\" + {oname} + {}",
+                                java_str(if de {
+                                    " muss eine Zahl sein."
+                                } else {
+                                    " must be a number."
+                                })
+                            ))
+                        )),
+                        OptType::Integer => checks.push(format!(
+                            "if ({given} && !Util.isInt(args[{i}])) {}",
+                            fail(format!(
+                                "\"&c\" + {oname} + {}",
+                                java_str(if de {
+                                    " muss eine ganze Zahl sein."
+                                } else {
+                                    " must be a whole number."
+                                })
+                            ))
+                        )),
+                        OptType::Player => checks.push(format!(
+                            "if ({given} && {var} == null) {}",
+                            fail(format!(
+                                "\"&c\" + args[{i}] + {}",
+                                java_str(if de {
+                                    " ist nicht online."
+                                } else {
+                                    " is not online."
+                                })
+                            ))
+                        )),
+                        OptType::Bool => checks.push(format!(
+                            "if ({given} && !Util.isBool(args[{i}])) {}",
+                            fail(format!(
+                                "\"&c\" + {oname} + {}",
+                                java_str(if de {
+                                    ": nur ja/nein."
+                                } else {
+                                    ": only yes/no."
+                                })
+                            ))
+                        )),
+                        OptType::Choice => {
+                            let arr = format!(
+                                "new String[] {{ {} }}",
+                                o.choices
+                                    .iter()
+                                    .map(|c| java_str(c))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            );
+                            checks.push(format!(
+                                "if ({given} && !Util.oneOf(args[{i}], {arr})) {}",
+                                fail(format!(
+                                    "\"&c\" + {oname} + {}",
+                                    java_str(&format!(": {}", o.choices.join(", ")))
+                                ))
+                            ));
+                        }
+                        _ => {}
+                    }
+                    let sugg: Vec<String> = match o.ty {
+                        OptType::Player => vec!["@players".into()],
+                        OptType::Bool => vec![
+                            if de { "ja".into() } else { "yes".into() },
+                            if de { "nein".into() } else { "no".into() },
+                        ],
+                        _ => o.choices.clone(),
+                    };
+                    tab.push(format!(
+                        "{{ {} }}",
+                        sugg.iter()
+                            .map(|x| java_str(x))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+                let tab_array = format!("new String[][] {{ {} }}", tab.join(", "));
+                let outs = blocks::shape(ev, g.proj)
+                    .map(|s| s.outputs.into_owned())
+                    .unwrap_or_default();
+                let exprs_ref: Vec<(&str, String)> =
+                    exprs.iter().map(|(a, b)| (a.as_str(), b.clone())).collect();
+                let mut pre = g.event_vars_pins(ev, &outs, &mut sc, &exprs_ref);
                 let pvar = format!("v{}_player", ev.id);
                 if players_only {
-                    match g.p {
-                        Platform::Paper => pre.push(format!(
-                            "if ({pvar} == null) {{ sender.sendMessage(\"Only players can use this command.\"); return true; }}"
-                        )),
-                        Platform::Fabric => pre.push(format!(
-                            "if ({pvar} == null) {{ source.sendFailure(Component.literal(\"Only players can use this command.\")); return 0; }}"
-                        )),
-                    }
+                    let msg = java_str(if de {
+                        "&cNur Spieler können diesen Befehl benutzen."
+                    } else {
+                        "&cOnly players can use this command."
+                    });
+                    pre.push(format!("if ({pvar} == null) {}", fail(msg)));
                 } else {
                     // The player may be null: do not use it automatically.
                     sc.player = None;
                 }
-                if min_args > 0 {
-                    match g.p {
-                        Platform::Paper => pre.push(format!(
-                            "if (args.length < {min_args}) {{ sender.sendMessage(Util.color({})); return true; }}",
-                            java_str(&usage)
-                        )),
-                        Platform::Fabric => pre.push(format!(
-                            "if (args.length < {min_args}) {{ source.sendFailure(Util.color({})); return 0; }}",
-                            java_str(&usage)
-                        )),
-                    }
-                }
+                pre.extend(checks);
                 let body = g.chain(ev.id, "next", &sc, &mut vec![]);
                 let mut all = pre;
                 all.extend(body);
+                let title = format!("// /{name} (#{})", ev.id);
                 parts.init.push(title);
+                let desc = cmd.description.clone();
                 match g.p {
                     Platform::Paper => {
                         let permission = if !custom_perm.is_empty() {
@@ -742,8 +889,9 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                             name: name.clone(),
                             desc,
                             aliases: aliases.clone(),
-                            op_default: op && custom_perm.is_empty(),
+                            op_default: op,
                             permission,
+                            usage: usage.clone(),
                         });
                         parts.init.push(format!(
                             "java.util.Objects.requireNonNull(getCommand({})).setExecutor((sender, command, label, args) -> {{",
@@ -752,9 +900,9 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                         parts.init.extend(indent(&all, 4));
                         parts.init.push("    return true;".into());
                         parts.init.push("});".into());
-                        if !suggestions.is_empty() {
+                        if !cmd.options.is_empty() {
                             parts.init.push(format!(
-                                "java.util.Objects.requireNonNull(getCommand({})).setTabCompleter((sender, command, alias, args) -> args.length == 1 ? Util.tab({suggest_array}, args[0]) : java.util.List.of());",
+                                "java.util.Objects.requireNonNull(getCommand({})).setTabCompleter((sender, command, alias, args) -> Util.tabArgs(args, {tab_array}));",
                                 java_str(&name)
                             ));
                         }
@@ -768,14 +916,10 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                         ] {
                             g.imports.insert(i.into());
                         }
-                        let m = format!("cmd{}", ev.id);
-                        if !suggestions.is_empty() {
-                            g.imports
-                                .insert("net.minecraft.commands.SharedSuggestionProvider".into());
-                        }
                         if !custom_perm.is_empty() {
                             g.warn(ev.id, "Eigene Berechtigungen gibt es bei Fabric nicht – der Befehl ist dort nur für OPs".into());
                         }
+                        let m = format!("cmd{}", ev.id);
                         parts.init.push("CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {".into());
                         for label in std::iter::once(&name).chain(aliases.iter()) {
                             parts.init.push(format!(
@@ -785,18 +929,18 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                             if op || !custom_perm.is_empty() {
                                 parts.init.push("        .requires(Util::isOp)".into());
                             }
-                            parts.init.push(format!(
-                                "        .executes(ctx -> {m}(ctx.getSource(), new String[0]))"
-                            ));
-                            parts.init.push("        .then(Commands.argument(\"args\", StringArgumentType.greedyString())".into());
-                            if !suggestions.is_empty() {
+                            if cmd.options.is_empty() {
+                                parts.init.push(format!("        .executes(ctx -> {m}(ctx.getSource(), new String[0])));"));
+                            } else {
                                 parts.init.push(format!(
-                                    "            .suggests((ctx, builder) -> SharedSuggestionProvider.suggest({suggest_array}, builder))"
+                                    "        .executes(ctx -> {m}(ctx.getSource(), new String[0]))"
+                                ));
+                                parts.init.push("        .then(Commands.argument(\"args\", StringArgumentType.greedyString())".into());
+                                parts.init.push(format!("            .suggests((ctx, builder) -> Util.suggestArgs(builder, {tab_array}))"));
+                                parts.init.push(format!(
+                                    "            .executes(ctx -> {m}(ctx.getSource(), StringArgumentType.getString(ctx, \"args\").trim().split(\"\\\\s+\")))));"
                                 ));
                             }
-                            parts.init.push(format!(
-                                "            .executes(ctx -> {m}(ctx.getSource(), StringArgumentType.getString(ctx, \"args\").trim().split(\"\\\\s+\")))));"
-                            ));
                         }
                         parts.init.push("});".into());
                         let mut mlines = vec![
@@ -829,7 +973,8 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                         format!("public void on{}(final {} event) {{", ev.id, code.listener),
                     ];
                     if !code.code.is_empty() {
-                        m.push(format!("    {}", code.code));
+                        let (guard, _) = g.subst(code.code, ev, def, &sc, false);
+                        m.push(format!("    {}", guard));
                     }
                     m.extend(indent(&pre, 4));
                     m.extend(indent(&body, 4));
@@ -946,6 +1091,7 @@ pub fn generate(proj: &Project) -> Output {
             imports: BTreeSet::new(),
             ws_idx: i,
             ws,
+            proj,
             reached: HashSet::new(),
             reported: HashSet::new(),
         };
@@ -1059,9 +1205,10 @@ tasks.jar {{
                 yml.push_str("commands:\n");
                 for c in &parts.commands {
                     yml.push_str(&format!(
-                        "  {}:\n    description: {}\n",
+                        "  {}:\n    description: {}\n    usage: {}\n",
                         c.name,
-                        yaml_str(&c.desc)
+                        yaml_str(&c.desc),
+                        yaml_str(&c.usage)
                     ));
                     if !c.aliases.is_empty() {
                         yml.push_str(&format!(

@@ -194,7 +194,10 @@ pub struct App {
     pub setup: Option<SetupState>,
     pub pack: PackCache,
     pub show_commands: bool,
-    pub selected_command: Option<(usize, NodeId)>,
+    /// Collapsed categories in the block search.
+    pub palette_collapsed: std::collections::HashSet<String>,
+    pub palette_filter: u8,
+    pub cmd_draft: Option<crate::ui::commands::Draft>,
     pub home_search: String,
     pub summaries: HashMap<PathBuf, (std::time::SystemTime, Option<ProjectSummary>)>,
     /// Screen rects of UI parts, for the tutorial highlights.
@@ -254,7 +257,9 @@ impl App {
             setup: None,
             pack: PackCache::default(),
             show_commands: false,
-            selected_command: None,
+            palette_collapsed: Default::default(),
+            palette_filter: 0,
+            cmd_draft: None,
             home_search: String::new(),
             summaries: HashMap::new(),
             ui_rects: HashMap::new(),
@@ -325,7 +330,8 @@ impl App {
         self.palette = None;
         self.canvas.fit_request = true;
         self.screen = Screen::Editor;
-        self.selected_command = None;
+        self.cmd_draft = None;
+        self.show_commands = false;
         self.refresh_pack(true);
     }
 

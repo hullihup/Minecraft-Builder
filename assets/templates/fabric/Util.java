@@ -223,4 +223,95 @@ __COMMON__
             __MAIN__.LOGGER.warn("Unknown or unsupported particle: {}", id);
         }
     }
+
+    // ----- commands -------------------------------------------------------------
+
+    public static ServerPlayer findPlayer(String name) {
+        return name == null || name.isEmpty() || SERVER == null ? null : SERVER.getPlayerList().getPlayerByName(name);
+    }
+
+    /** Tab completion: options per argument index, "@players" = online player names. */
+    public static java.util.concurrent.CompletableFuture<com.mojang.brigadier.suggestion.Suggestions> suggestArgs(
+            com.mojang.brigadier.suggestion.SuggestionsBuilder builder, String[][] options) {
+        String rem = builder.getRemaining();
+        int idx = rem.isEmpty() ? 0 : rem.split(" ", -1).length - 1;
+        int cut = rem.lastIndexOf(' ') + 1;
+        com.mojang.brigadier.suggestion.SuggestionsBuilder b = builder.createOffset(builder.getStart() + cut);
+        String cur = rem.substring(cut).toLowerCase(Locale.ROOT);
+        if (idx < options.length) {
+            for (String o : options[idx]) {
+                if (o.equals("@players")) {
+                    if (SERVER == null) continue;
+                    for (ServerPlayer p : SERVER.getPlayerList().getPlayers()) {
+                        String n = p.getName().getString();
+                        if (n.toLowerCase(Locale.ROOT).startsWith(cur)) b.suggest(n);
+                    }
+                } else if (o.toLowerCase(Locale.ROOT).startsWith(cur)) {
+                    b.suggest(o);
+                }
+            }
+        }
+        return b.buildFuture();
+    }
+
+    // ----- more blocks ----------------------------------------------------------
+
+    public static void bossbar(ServerPlayer p, String text, double percent, double seconds, String color) {
+        net.minecraft.server.level.ServerBossEvent bar = new net.minecraft.server.level.ServerBossEvent(
+                java.util.UUID.randomUUID(), color(text),
+                net.minecraft.world.BossEvent.BossBarColor.valueOf(color),
+                net.minecraft.world.BossEvent.BossBarOverlay.PROGRESS);
+        bar.setProgress((float) Math.max(0, Math.min(1, percent / 100.0)));
+        bar.addPlayer(p);
+        Scheduler.later(Math.max(1, (int) (seconds * 20)), bar::removeAllPlayers);
+    }
+
+    public static void setFly(ServerPlayer p, boolean allow) {
+        p.getAbilities().mayfly = allow;
+        if (!allow) p.getAbilities().flying = false;
+        p.onUpdateAbilities();
+    }
+
+    public static double countItems(ServerPlayer p, String id) {
+        Item item = BuiltInRegistries.ITEM.getValue(id(id));
+        int n = 0;
+        for (int i = 0; i < p.getInventory().getContainerSize(); i++) {
+            ItemStack st = p.getInventory().getItem(i);
+            if (!st.isEmpty() && st.getItem() == item) n += st.getCount();
+        }
+        return n;
+    }
+
+    public static boolean takeItems(ServerPlayer p, String id, double amount) {
+        Item item = BuiltInRegistries.ITEM.getValue(id(id));
+        int need = Math.max(1, (int) amount);
+        if (item == Items.AIR || countItems(p, id) < need) return false;
+        for (int i = 0; i < p.getInventory().getContainerSize() && need > 0; i++) {
+            ItemStack st = p.getInventory().getItem(i);
+            if (!st.isEmpty() && st.getItem() == item) {
+                int take = Math.min(need, st.getCount());
+                st.shrink(take);
+                need -= take;
+            }
+        }
+        p.getInventory().setChanged();
+        return true;
+    }
+
+    public static void weather(String world, String type) {
+        ServerLevel l = level(world);
+        SERVER.getCommands().performPrefixedCommand(
+                SERVER.createCommandSourceStack().withLevel(l).withSuppressedOutput(), "weather " + type);
+    }
+
+    public static ServerPlayer randomPlayer() {
+        List<ServerPlayer> all = new ArrayList<>(SERVER.getPlayerList().getPlayers());
+        return all.isEmpty() ? null : all.get(java.util.concurrent.ThreadLocalRandom.current().nextInt(all.size()));
+    }
+
+    public static double distance(Loc a, Loc b) {
+        if (a == null || b == null || a.level() != b.level()) return -1;
+        double dx = a.x() - b.x(), dy = a.y() - b.y(), dz = a.z() - b.z();
+        return Math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
 }

@@ -2,6 +2,7 @@ pub mod canvas;
 pub mod commands;
 pub mod dialogs;
 pub mod home;
+pub mod icons;
 pub mod onboarding;
 pub mod palette;
 pub mod panels;

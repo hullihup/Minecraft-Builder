@@ -3,10 +3,10 @@
 use crate::app::{Activity, App, BottomTab, ConsoleFilter, Dialog, Palette, RightTab};
 use crate::blocks::{self, CATEGORIES, Kind, PinType, Special};
 use crate::build::Level;
-use crate::codegen;
 use crate::i18n::{is_german, t, tl};
 use crate::model::Platform;
 use crate::theme;
+use crate::ui::icons::{self, Icon};
 use crate::ui::widgets::{self, section_header};
 use egui::{Color32, CornerRadius, Frame, Margin, RichText, Sense, Stroke, Ui, vec2};
 
@@ -40,50 +40,57 @@ pub fn top_bar(app: &mut App, ui: &mut Ui) {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     for (on, icon, tip) in [
-                        (&mut app.show_right, "◨", t("Rechte Leiste", "Right panel")),
+                        (
+                            &mut app.show_right,
+                            Icon::PanelRight,
+                            t("Rechte Leiste", "Right panel"),
+                        ),
                         (
                             &mut app.show_bottom,
-                            "⬓",
+                            Icon::PanelBottom,
                             t("Untere Leiste", "Bottom panel"),
                         ),
-                        (&mut app.show_sidebar, "◧", t("Seitenleiste", "Sidebar")),
+                        (
+                            &mut app.show_sidebar,
+                            Icon::PanelLeft,
+                            t("Seitenleiste", "Sidebar"),
+                        ),
                     ] {
-                        let col = if *on { theme::TEXT } else { theme::TEXT_WEAK };
-                        if ui
-                            .add(
-                                egui::Button::new(RichText::new(icon).size(15.0).color(col))
-                                    .frame(false),
-                            )
-                            .on_hover_text(tip)
-                            .clicked()
-                        {
+                        let (r, resp) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
+                        if resp.hovered() {
+                            ui.painter()
+                                .rect_filled(r, 5.0, Color32::from_white_alpha(14));
+                        }
+                        icons::paint(
+                            ui.painter(),
+                            r.shrink(5.0),
+                            icon,
+                            if *on { theme::TEXT } else { theme::TEXT_WEAK },
+                        );
+                        if resp.on_hover_text(tip).clicked() {
                             *on = !*on;
                         }
                     }
                     ui.add_space(10.0);
                     if app.job.is_some() {
-                        let b = egui::Button::new(
-                            RichText::new(format!("⏹ {}", t("Stopp", "Stop")))
-                                .color(Color32::BLACK)
-                                .strong(),
+                        if icons::styled_button(
+                            ui,
+                            Some(Icon::Stop),
+                            t("Stopp", "Stop"),
+                            Some((theme::RED, Color32::BLACK)),
                         )
-                        .fill(theme::RED)
-                        .corner_radius(6)
-                        .min_size(vec2(76.0, 28.0));
-                        if ui.add(b).clicked() {
+                        .clicked()
+                        {
                             app.cancel_build();
                         }
                         ui.add(egui::Spinner::new().color(theme::GREEN));
                     } else {
-                        let b = egui::Button::new(
-                            RichText::new(format!("▶ {}", t("Bauen", "Build")))
-                                .color(Color32::BLACK)
-                                .strong(),
-                        )
-                        .fill(theme::GREEN)
-                        .corner_radius(6)
-                        .min_size(vec2(84.0, 28.0));
-                        let br = ui.add(b);
+                        let br = icons::styled_button(
+                            ui,
+                            Some(Icon::Play),
+                            t("Bauen", "Build"),
+                            Some((theme::GREEN, Color32::BLACK)),
+                        );
                         app.ui_rects.insert("build", br.rect);
                         if br
                             .on_hover_text(t(
@@ -116,11 +123,17 @@ pub fn top_bar(app: &mut App, ui: &mut Ui) {
                 Stroke::new(1.0, theme::BORDER),
                 egui::StrokeKind::Inside,
             );
+            icons::paint(
+                ui.painter(),
+                egui::Rect::from_center_size(sr.left_center() + vec2(16.0, 0.0), vec2(13.0, 13.0)),
+                Icon::Search,
+                theme::TEXT_WEAK,
+            );
             ui.painter().text(
-                sr.left_center() + vec2(10.0, 0.0),
+                sr.left_center() + vec2(30.0, 0.0),
                 egui::Align2::LEFT_CENTER,
                 format!(
-                    "🔍  {} {}",
+                    "{} {}",
                     t("Blöcke suchen in", "Search blocks in"),
                     app.project.settings.name
                 ),
@@ -157,7 +170,7 @@ pub fn top_bar(app: &mut App, ui: &mut Ui) {
 fn menus(app: &mut App, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     ui.menu_button(t("Datei", "File"), |ui| {
-        if ui.button(t("🏠 Startseite", "🏠 Start screen")).clicked() {
+        if ui.button(t("Startseite", "Start screen")).clicked() {
             app.go_home();
         }
         ui.separator();
@@ -317,7 +330,7 @@ fn menus(app: &mut App, ui: &mut Ui) {
     });
     ui.menu_button(t("Projekt", "Project"), |ui| {
         if ui
-            .button(t("▶ Bauen (.jar)   F5", "▶ Build (.jar)   F5"))
+            .button(t("Bauen (.jar)   F5", "Build (.jar)   F5"))
             .clicked()
         {
             app.start_build(&ctx, false);
@@ -347,10 +360,7 @@ fn menus(app: &mut App, ui: &mut Ui) {
         }
     });
     ui.menu_button(t("Hilfe", "Help"), |ui| {
-        if ui
-            .button(t("🎓 Tutorial starten", "🎓 Start tutorial"))
-            .clicked()
-        {
+        if ui.button(t("Tutorial starten", "Start tutorial")).clicked() {
             crate::ui::onboarding::start_tutorial(app);
         }
         if ui
@@ -503,25 +513,29 @@ pub fn activity_bar(app: &mut App, ui: &mut Ui) {
             let items = [
                 (
                     Activity::Workspaces,
-                    "🗂",
-                    t("Arbeitsbereiche", "Workspaces"),
+                    Icon::Layers,
+                    t("Arbeitsbereiche & Befehle", "Workspaces & commands"),
                 ),
                 (
                     Activity::Blocks,
-                    "🧩",
+                    Icon::Puzzle,
                     t("Block-Bibliothek", "Block library"),
                 ),
                 (
+                    Activity::Resources,
+                    Icon::Image,
+                    t("Texturen & Modelle", "Textures & models"),
+                ),
+                (
                     Activity::Project,
-                    "⚙",
+                    Icon::Gear,
                     t("Projekt & Versionen", "Project & versions"),
                 ),
                 (
-                    Activity::Resources,
-                    "🎨",
-                    t("Texturen & Modelle", "Textures & models"),
+                    Activity::Build,
+                    Icon::Package,
+                    t("Bauen & Export", "Build & export"),
                 ),
-                (Activity::Build, "📦", t("Bauen & Export", "Build & export")),
             ];
             for (act, icon, tip) in items {
                 let active = app.activity == act && app.show_sidebar;
@@ -538,11 +552,10 @@ pub fn activity_bar(app: &mut App, ui: &mut Ui) {
                 } else {
                     theme::TEXT_WEAK
                 };
-                ui.painter().text(
-                    r.center(),
-                    egui::Align2::CENTER_CENTER,
+                icons::paint(
+                    ui.painter(),
+                    egui::Rect::from_center_size(r.center(), vec2(21.0, 21.0)),
                     icon,
-                    egui::FontId::proportional(19.0),
                     col,
                 );
                 if resp.clone().on_hover_text(tip).clicked() {
@@ -581,7 +594,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
 fn list_item(
     ui: &mut Ui,
     selected: bool,
-    icon: &str,
+    icon: Icon,
     text: &str,
     icon_col: Color32,
 ) -> egui::Response {
@@ -597,11 +610,10 @@ fn list_item(
         ui.painter()
             .rect_filled(r, 0.0, Color32::from_rgb(0x2A, 0x2C, 0x31));
     }
-    ui.painter().text(
-        r.left_center() + vec2(14.0, 0.0),
-        egui::Align2::LEFT_CENTER,
+    icons::paint(
+        ui.painter(),
+        egui::Rect::from_center_size(r.left_center() + vec2(20.0, 0.0), vec2(14.0, 14.0)),
         icon,
-        egui::FontId::proportional(13.0),
         icon_col,
     );
     ui.painter().text(
@@ -634,7 +646,13 @@ fn sidebar_workspaces(app: &mut App, ui: &mut Ui) {
     let mut move_up = None;
     let n = app.project.workspaces.len();
     for (i, ws) in app.project.workspaces.iter().enumerate() {
-        let resp = list_item(ui, i == app.active_ws, "▤", &ws.name, theme::TEXT_WEAK);
+        let resp = list_item(
+            ui,
+            i == app.active_ws,
+            Icon::Layers,
+            &ws.name,
+            theme::TEXT_WEAK,
+        );
         if resp.clicked() {
             switch = Some(i);
         }
@@ -681,26 +699,22 @@ fn sidebar_workspaces(app: &mut App, ui: &mut Ui) {
 
     // Commands and events of the whole project.
     ui.add_space(14.0);
-    let mut cmds = vec![];
     let mut evs = vec![];
     for (wi, ws) in app.project.workspaces.iter().enumerate() {
         for n in &ws.nodes {
             if let Some(d) = blocks::get(&n.kind) {
-                if d.special == Special::Command {
-                    cmds.push((
-                        wi,
-                        n.id,
-                        format!(
-                            "/{}",
-                            codegen::clean_command(codegen::value_of(n, "name", "hallo"))
-                        ),
-                    ));
-                } else if d.kind == Kind::Event {
+                if d.kind == Kind::Event && d.special != Special::Command {
                     evs.push((wi, n.id, tl(d.name).to_string()));
                 }
             }
         }
     }
+    let cmds: Vec<(crate::model::NodeId, String)> = app
+        .project
+        .commands
+        .iter()
+        .map(|c| (c.id, format!("/{}", c.name)))
+        .collect();
     ui.horizontal(|ui| {
         section_header(ui, t("Befehle", "Commands"));
         ui.label(
@@ -708,46 +722,36 @@ fn sidebar_workspaces(app: &mut App, ui: &mut Ui) {
                 .size(11.0)
                 .color(theme::TEXT_WEAK),
         );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if icons::icon_button(ui, Icon::Plus, 20.0, t("Neuer Befehl", "New command")).clicked()
+            {
+                let c = app.canvas.rect.center();
+                let view = *app.view();
+                let scene = ((c - app.canvas.rect.min) - view.pan) / view.zoom;
+                let id = app.new_command_with_block(scene.to_pos2());
+                app.open_commands(Some(id));
+            }
+        });
     });
     ui.add_space(4.0);
-    for (wi, id, name) in &cmds {
-        if list_item(
-            ui,
-            app.selection.contains(id) && *wi == app.active_ws,
-            "⌘",
-            name,
-            theme::GREEN,
-        )
-        .clicked()
+    for (id, name) in &cmds {
+        if list_item(ui, false, Icon::Slash, name, theme::GREEN)
+            .on_hover_text(t("Klick: bearbeiten", "Click: edit"))
+            .clicked()
         {
-            app.focus_node = Some((*wi, *id));
+            app.open_commands(Some(*id));
         }
     }
     if list_item(
         ui,
         false,
-        "➕",
-        t("Befehl hinzufügen…", "Add command…"),
-        theme::TEXT_WEAK,
-    )
-    .clicked()
-    {
-        let c = app.canvas.rect.center();
-        let view = *app.view();
-        let scene = ((c - app.canvas.rect.min) - view.pan) / view.zoom;
-        let id = app.add_node("ev_command", scene.to_pos2());
-        app.focus_node = Some((app.active_ws, id));
-    }
-    if list_item(
-        ui,
-        false,
-        "✏",
+        Icon::Edit,
         t("Befehle bearbeiten…", "Edit commands…"),
         theme::TEXT_WEAK,
     )
     .clicked()
     {
-        app.show_commands = true;
+        app.open_commands(None);
     }
     ui.add_space(14.0);
     ui.horizontal(|ui| {
@@ -763,7 +767,7 @@ fn sidebar_workspaces(app: &mut App, ui: &mut Ui) {
         if list_item(
             ui,
             app.selection.contains(id) && *wi == app.active_ws,
-            "⚡",
+            Icon::Bolt,
             name,
             theme::GREEN,
         )
@@ -802,39 +806,37 @@ fn sidebar_blocks(app: &mut App, ui: &mut Ui) {
         if defs.is_empty() {
             continue;
         }
-        egui::CollapsingHeader::new(
-            RichText::new(format!("{}  {}", cat.icon(), tl(cat.label()))).color(cat.color()),
-        )
-        .id_salt(("libcat", cat as u8))
-        .default_open(true)
-        .show(ui, |ui| {
-            for d in defs {
-                let supported = d.supports(plat);
-                let id = egui::Id::unique(("lib", d.id));
-                let resp = ui
-                    .dnd_drag_source(id, d.id.to_string(), |ui| {
-                        let txt = RichText::new(tl(d.name)).color(if supported {
-                            theme::TEXT
-                        } else {
-                            theme::TEXT_WEAK
-                        });
-                        ui.add(egui::Label::new(txt).sense(Sense::click()));
-                    })
-                    .response;
-                let resp = resp.on_hover_ui(|ui| {
-                    ui.set_max_width(280.0);
-                    ui.label(RichText::new(tl(d.name)).strong());
-                    ui.label(tl(d.desc));
-                    widgets::platform_tags(ui, d);
-                });
-                if resp.clicked() {
-                    let c = app.canvas.rect.center();
-                    let view = *app.view();
-                    let scene = ((c - app.canvas.rect.min) - view.pan) / view.zoom;
-                    app.add_node(d.id, scene.to_pos2());
+        egui::CollapsingHeader::new(RichText::new(tl(cat.label())).color(cat.color()))
+            .id_salt(("libcat", cat as u8))
+            .default_open(true)
+            .show(ui, |ui| {
+                for d in defs {
+                    let supported = d.supports(plat);
+                    let id = egui::Id::unique(("lib", d.id));
+                    let resp = ui
+                        .dnd_drag_source(id, d.id.to_string(), |ui| {
+                            let txt = RichText::new(tl(d.name)).color(if supported {
+                                theme::TEXT
+                            } else {
+                                theme::TEXT_WEAK
+                            });
+                            ui.add(egui::Label::new(txt).sense(Sense::click()));
+                        })
+                        .response;
+                    let resp = resp.on_hover_ui(|ui| {
+                        ui.set_max_width(280.0);
+                        ui.label(RichText::new(tl(d.name)).strong());
+                        ui.label(tl(d.desc));
+                        widgets::platform_tags(ui, d);
+                    });
+                    if resp.clicked() {
+                        let c = app.canvas.rect.center();
+                        let view = *app.view();
+                        let scene = ((c - app.canvas.rect.min) - view.pan) / view.zoom;
+                        app.add_node(d.id, scene.to_pos2());
+                    }
                 }
-            }
-        });
+            });
     }
 }
 
@@ -992,8 +994,8 @@ fn sidebar_project(app: &mut App, ui: &mut Ui) {
                 t("Suche…", "Searching…")
             } else {
                 t(
-                    "⟳ Neueste passende Versionen laden",
-                    "⟳ Load latest matching versions",
+                    "Neueste passende Versionen laden",
+                    "Load latest matching versions",
                 )
             }),
         )
@@ -1028,11 +1030,7 @@ fn sidebar_build(app: &mut App, ui: &mut Ui) {
     if ui
         .add_enabled(
             !busy,
-            big(
-                t("▶ .jar bauen", "▶ Build .jar"),
-                theme::GREEN,
-                Color32::BLACK,
-            ),
+            big(t(".jar bauen", "Build .jar"), theme::GREEN, Color32::BLACK),
         )
         .clicked()
     {
@@ -1093,7 +1091,8 @@ fn sidebar_build(app: &mut App, ui: &mut Ui) {
                 .desired_width(ui.available_width() - 34.0)
                 .hint_text(t("(optional)", "(optional)")),
         );
-        if ui.button("📁").clicked() {
+        if icons::icon_button(ui, Icon::Folder, 26.0, t("Ordner wählen", "Pick folder")).clicked()
+        {
             if let Some(d) = rfd::FileDialog::new().pick_folder() {
                 s.deploy_dir = d.display().to_string();
             }
@@ -1123,8 +1122,8 @@ pub fn right_panel(app: &mut App, ui: &mut Ui) {
                 ui,
                 &mut app.right_tab,
                 &[
-                    (RightTab::Inspector, t("⚙ Inspector", "⚙ Inspector")),
-                    (RightTab::Code, t("☕ Java-Code", "☕ Java code")),
+                    (RightTab::Inspector, Icon::Gear, t("Inspector", "Inspector")),
+                    (RightTab::Code, Icon::Code, t("Java-Code", "Java code")),
                 ],
             );
             egui::Frame::new()
@@ -1141,7 +1140,7 @@ pub fn right_panel(app: &mut App, ui: &mut Ui) {
     app.ui_rects.insert("right", resp.response.rect);
 }
 
-fn tab_strip<T: PartialEq + Copy>(ui: &mut Ui, current: &mut T, tabs: &[(T, &str)]) {
+fn tab_strip<T: PartialEq + Copy>(ui: &mut Ui, current: &mut T, tabs: &[(T, Icon, &str)]) {
     let (strip, _) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::hover());
     ui.painter().rect_filled(strip, 0.0, theme::BG_PANEL);
     ui.painter().line_segment(
@@ -1149,13 +1148,13 @@ fn tab_strip<T: PartialEq + Copy>(ui: &mut Ui, current: &mut T, tabs: &[(T, &str
         Stroke::new(1.0, theme::BORDER),
     );
     let mut x = strip.left();
-    for (tab, label) in tabs {
+    for (tab, icon, label) in tabs {
         let g = ui.painter().layout_no_wrap(
             label.to_string(),
             egui::FontId::proportional(13.0),
             theme::TEXT,
         );
-        let w = g.size().x + 28.0;
+        let w = g.size().x + 48.0;
         let r = egui::Rect::from_min_size(egui::pos2(x, strip.top()), vec2(w, strip.height()));
         let resp = ui.interact(r, ui.scope_id().with(label), Sense::click());
         let active = *current == *tab;
@@ -1174,7 +1173,14 @@ fn tab_strip<T: PartialEq + Copy>(ui: &mut Ui, current: &mut T, tabs: &[(T, &str
         } else {
             theme::TEXT_WEAK
         };
-        ui.painter().galley(r.center() - g.size() / 2.0, g, col);
+        icons::paint(
+            ui.painter(),
+            egui::Rect::from_center_size(r.left_center() + vec2(20.0, 0.0), vec2(14.0, 14.0)),
+            *icon,
+            if active { theme::ACCENT } else { col },
+        );
+        ui.painter()
+            .galley(r.left_center() + vec2(34.0, -g.size().y / 2.0), g, col);
         if resp.clicked() {
             *current = *tab;
         }
@@ -1294,11 +1300,7 @@ fn inspector(app: &mut App, ui: &mut Ui) {
             return;
         };
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(def.cat.icon())
-                    .size(18.0)
-                    .color(def.cat.color()),
-            );
+            icons::icon(ui, def.cat.icon_kind(), 18.0, def.cat.color());
             ui.label(RichText::new(tl(def.name)).size(17.0).strong());
             ui.label(RichText::new(format!("#{}", node.id)).color(theme::TEXT_WEAK));
         });
@@ -1349,24 +1351,24 @@ fn inspector(app: &mut App, ui: &mut Ui) {
             section_header(ui, t("Eingänge", "Inputs"));
             ui.add_space(4.0);
             for p in inputs {
-                let is_conn = connected.iter().any(|c| c == p.id);
+                let is_conn = connected.iter().any(|c| *c == p.id);
                 labeled(
                     ui,
-                    &format!("{} · {}", tl(p.label), tl(p.ty.label())),
+                    &format!("{} · {}", p.label.text(), tl(p.ty.label())),
                     |ui| {
                         if is_conn {
                             ui.label(
-                                RichText::new(t("↳ verbunden", "↳ connected")).color(p.ty.color()),
+                                RichText::new(t("verbunden", "connected")).color(p.ty.color()),
                             );
                         } else if p.ty.has_inline() {
                             widgets::pin_editor(
                                 ui,
                                 p.ty,
-                                p.id,
+                                &p.id,
                                 p.default,
                                 &mut node.values,
                                 w,
-                                ("insp_p", id, p.id),
+                                ("insp_p", id, p.id.clone()),
                             );
                         } else {
                             ui.label(
@@ -1393,7 +1395,7 @@ fn inspector(app: &mut App, ui: &mut Ui) {
             for p in outs {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("●").color(p.ty.color()));
-                    ui.label(format!("{} · {}", tl(p.label), tl(p.ty.label())));
+                    ui.label(format!("{} · {}", p.label.text(), tl(p.ty.label())));
                 });
             }
             ui.add_space(8.0);
@@ -1416,8 +1418,11 @@ fn inspector(app: &mut App, ui: &mut Ui) {
             }
         });
         if open_cmds {
-            app.selected_command = Some((ws_idx, id));
-            app.show_commands = true;
+            let cmd = app.project.workspaces[ws_idx]
+                .node(id)
+                .and_then(|n| app.project.node_command(n))
+                .map(|c| c.id);
+            app.open_commands(cmd);
         }
     }
     if delete {
@@ -1573,14 +1578,14 @@ pub fn bottom_panel(app: &mut App, ui: &mut Ui) {
         .frame(panel_frame(theme::BG_PANEL))
         .show(ui, |ui| {
             let errors = app.problems.iter().filter(|p| p.error).count();
-            let probs_label = format!("⚠ {} {}", t("Probleme", "Problems"), app.problems.len());
-            let cons_label = t("▤ Konsole", "▤ Console").to_string();
+            let probs_label = format!("{} {}", t("Probleme", "Problems"), app.problems.len());
+            let cons_label = t("Konsole", "Console").to_string();
             tab_strip(
                 ui,
                 &mut app.bottom_tab,
                 &[
-                    (BottomTab::Console, &cons_label),
-                    (BottomTab::Problems, &probs_label),
+                    (BottomTab::Console, Icon::Keyboard, &cons_label),
+                    (BottomTab::Problems, Icon::Warning, &probs_label),
                 ],
             );
             let _ = errors;
@@ -1693,8 +1698,7 @@ fn console(app: &mut App, ui: &mut Ui) {
 fn problems(app: &mut App, ui: &mut Ui) {
     if app.problems.is_empty() {
         ui.label(
-            RichText::new(t("✔ Keine Probleme gefunden.", "✔ No problems found."))
-                .color(theme::GREEN),
+            RichText::new(t("Keine Probleme gefunden.", "No problems found.")).color(theme::GREEN),
         );
         return;
     }
@@ -1710,13 +1714,13 @@ fn problems(app: &mut App, ui: &mut Ui) {
                     .map(|w| w.name.as_str())
                     .unwrap_or("?");
                 let (icon, col) = if p.error {
-                    ("✖", theme::RED)
+                    (Icon::Close, theme::RED)
                 } else {
-                    ("⚠", theme::YELLOW)
+                    (Icon::Warning, theme::YELLOW)
                 };
                 let r = ui
                     .horizontal(|ui| {
-                        ui.label(RichText::new(icon).color(col));
+                        icons::icon(ui, icon, 14.0, col);
                         ui.label(RichText::new(&p.msg).color(theme::TEXT));
                         if let Some(n) = p.node {
                             ui.label(
@@ -1760,7 +1764,7 @@ pub fn tabs(app: &mut App, ui: &mut Ui) {
     let mut x = strip.left();
     let mut switch = None;
     for (i, ws) in app.project.workspaces.iter().enumerate() {
-        let label = format!("▤  {}", ws.name);
+        let label = format!("     {}", ws.name);
         let g = ui
             .painter()
             .layout_no_wrap(label, egui::FontId::proportional(13.0), theme::TEXT);
@@ -1787,6 +1791,12 @@ pub fn tabs(app: &mut App, ui: &mut Ui) {
         } else {
             theme::TEXT_WEAK
         };
+        icons::paint(
+            ui.painter(),
+            egui::Rect::from_center_size(r.left_center() + vec2(20.0, 0.0), vec2(13.0, 13.0)),
+            Icon::Layers,
+            if active { theme::ACCENT } else { col },
+        );
         ui.painter()
             .galley(r.left_center() + vec2(15.0, -g.size().y / 2.0), g, col);
         if resp.clicked() {

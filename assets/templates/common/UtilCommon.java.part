@@ -66,3 +66,58 @@
         }
         return out;
     }
+
+    /** Arguments from index i to the end, joined with spaces. */
+    public static String rest(String[] args, int i) {
+        if (args == null || args.length <= i) return "";
+        return String.join(" ", java.util.Arrays.copyOfRange(args, i, args.length));
+    }
+
+    public static boolean isInt(String s) {
+        return isNum(s) && num(s) == Math.floor(num(s));
+    }
+
+    public static boolean isBool(String s) {
+        String v = s == null ? "" : s.trim().toLowerCase(java.util.Locale.ROOT);
+        return java.util.List.of("ja", "nein", "yes", "no", "true", "false", "an", "aus", "on", "off", "1", "0").contains(v);
+    }
+
+    public static boolean bool(String s) {
+        String v = s == null ? "" : s.trim().toLowerCase(java.util.Locale.ROOT);
+        return java.util.List.of("ja", "yes", "true", "an", "on", "1").contains(v);
+    }
+
+    public static boolean oneOf(String s, String[] options) {
+        for (String o : options) {
+            if (o.equalsIgnoreCase(s)) return true;
+        }
+        return false;
+    }
+
+    private static final java.util.Map<String, Long> COOLDOWNS = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 0 if the cooldown is over (and starts it again), otherwise the seconds left. */
+    public static double cooldown(String key, double seconds) {
+        long now = System.currentTimeMillis();
+        Long until = COOLDOWNS.get(key);
+        if (until != null && until > now) {
+            return Math.ceil((until - now) / 100.0) / 10.0;
+        }
+        COOLDOWNS.put(key, now + (long) (seconds * 1000));
+        return 0;
+    }
+
+    /** Parses one menu line "slot: item | name | lore". Returns null if invalid. */
+    public static String[] menuLine(String line) {
+        int colon = line.indexOf(':');
+        if (colon < 0) return null;
+        String slot = line.substring(0, colon).trim();
+        if (!isInt(slot)) return null;
+        String[] parts = line.substring(colon + 1).split("\\|", 3);
+        return new String[] {
+            slot,
+            parts[0].trim(),
+            parts.length > 1 ? parts[1].trim() : "",
+            parts.length > 2 ? parts[2].trim() : ""
+        };
+    }

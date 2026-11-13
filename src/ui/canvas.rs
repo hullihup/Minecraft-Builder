@@ -528,6 +528,22 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         v
     };
     let hovered_pin_candidate = app.canvas.link_drag.clone();
+    // Command blocks: title and option outputs come from the command definition.
+    let cmd_info: HashMap<NodeId, (String, Vec<blocks::PinDef>)> = app.project.workspaces[ws_idx]
+        .nodes
+        .iter()
+        .filter(|n| n.kind == "ev_command")
+        .map(|n| {
+            let title = match app.project.node_command(n) {
+                Some(c) => format!("{} · /{}", t("Befehl", "Command"), c.name),
+                None => format!("{} · ?", t("Befehl", "Command")),
+            };
+            let outs = blocks::shape(n, &app.project)
+                .map(|s| s.outputs.into_owned())
+                .unwrap_or_default();
+            (n.id, (title, outs))
+        })
+        .collect();
     let mut new_sizes = HashMap::new();
     for idx in order {
         let node = &mut app.project.workspaces[ws_idx].nodes[idx];
@@ -623,6 +639,19 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         nui.spacing_mut().item_spacing = vec2(6.0, 4.0);
         nui.spacing_mut().interact_size.y = 20.0;
         nui.style_mut().spacing.button_padding = vec2(6.0, 2.0);
+        {
+            let v = &mut nui.style_mut().visuals;
+            let field = Color32::from_rgb(0x1C, 0x1D, 0x21);
+            v.extreme_bg_color = field;
+            v.text_edit_bg_color = Some(field);
+            for w in [&mut v.widgets.inactive, &mut v.widgets.hovered] {
+                w.corner_radius = CornerRadius::same(4);
+            }
+            v.widgets.inactive.bg_fill = field;
+            v.widgets.inactive.weak_bg_fill = field;
+            v.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0x34, 0x37, 0x3D));
+            v.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0x55, 0x59, 0x61));
+        }
 
         // Header
         let (hrect, _) = nui.allocate_exact_size(vec2(width, HEADER_H), Sense::hover());
@@ -630,23 +659,26 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         let mut pin_list: Vec<(String, bool, PinType, Pos2)> = vec![];
         {
             let p = nui.painter();
-            p.text(
-                hrect.left_center() + vec2(PAD_X + 2.0, 0.0),
-                egui::Align2::LEFT_CENTER,
-                def.cat.icon(),
-                FontId::proportional(13.0),
+            let title_text = cmd_info
+                .get(&nid)
+                .map(|c| c.0.clone())
+                .unwrap_or_else(|| tl(def.name).to_string());
+            crate::ui::icons::paint(
+                p,
+                Rect::from_center_size(
+                    hrect.left_center() + vec2(PAD_X + 7.0, 0.0),
+                    vec2(15.0, 15.0),
+                ),
+                def.cat.icon_kind(),
                 cat,
             );
-            let title_galley = p.layout_no_wrap(
-                tl(def.name).to_string(),
-                FontId::proportional(13.5),
-                theme::TEXT,
-            );
+            let title_galley =
+                p.layout_no_wrap(title_text.clone(), FontId::proportional(13.5), theme::TEXT);
             let max_title = width - 2.0 * PAD_X - 60.0;
             let title_pos = hrect.left_center() + vec2(PAD_X + 22.0, -title_galley.size().y / 2.0);
             if title_galley.size().x > max_title {
                 let g = p.layout(
-                    tl(def.name).to_string(),
+                    title_text.clone(),
                     FontId::proportional(12.0),
                     theme::TEXT,
                     max_title,
@@ -678,11 +710,10 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 nui.painter()
                     .rect_filled(mr, 4.0, Color32::from_white_alpha(18));
             }
-            nui.painter().text(
-                mr.center(),
-                egui::Align2::CENTER_CENTER,
-                "⋯",
-                FontId::proportional(14.0),
+            crate::ui::icons::paint(
+                nui.painter(),
+                mr.shrink(2.0),
+                crate::ui::icons::Icon::Dots,
                 if mresp.hovered() {
                     theme::TEXT
                 } else {
@@ -766,8 +797,18 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             }
         }
 
-        // Data inputs
+        // Data inputs (optional ones are folded away until opened or connected)
+        let adv_id = Id::unique(("adv_open", nid));
+        let adv_open = ctx.data(|d| d.get_temp::<bool>(adv_id)).unwrap_or(false);
+        let hidden: Vec<&blocks::PinDef> = def
+            .inputs
+            .iter()
+            .filter(|p| p.advanced && !connected.contains(&(nid, p.id.to_string(), false)))
+            .collect();
         for pin in def.inputs.iter().filter(|p| p.ty != PinType::Exec) {
+            if !adv_open && hidden.iter().any(|h| h.id == pin.id) {
+                continue;
+            }
             if node.kind.starts_with("data_")
                 && pin.id == "player"
                 && node.values.get("scope").map(|s| s.as_str()) == Some("global")
@@ -776,16 +817,20 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             }
             let is_conn = connected.contains(&(nid, pin.id.to_string(), false));
             let r = row(&mut nui, |ui| {
-                row_label(ui, label_w, egui::RichText::new(tl(pin.label)).size(11.5));
+                row_label(
+                    ui,
+                    label_w,
+                    egui::RichText::new(pin.label.text()).size(11.5),
+                );
                 if !is_conn && pin.ty.has_inline() {
                     changed |= widgets::pin_editor(
                         ui,
                         pin.ty,
-                        pin.id,
+                        &pin.id,
                         pin.default,
                         &mut node.values,
                         edit_w,
-                        ("p", nid, pin.id),
+                        ("p", nid, pin.id.clone()),
                     );
                 } else if !is_conn {
                     ui.label(
@@ -808,14 +853,50 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             ));
         }
 
+        if !hidden.is_empty() {
+            let label = if adv_open {
+                format!("▾ {}", t("weniger Optionen", "fewer options"))
+            } else {
+                if hidden.len() == 1 {
+                    format!("▸ 1 {}", t("weitere Option", "more option"))
+                } else {
+                    format!(
+                        "▸ {} {}",
+                        hidden.len(),
+                        t("weitere Optionen", "more options")
+                    )
+                }
+            };
+            let r = row(&mut nui, |ui| {
+                ui.label(
+                    egui::RichText::new(&label)
+                        .size(11.0)
+                        .color(theme::TEXT_WEAK),
+                );
+            });
+            let resp = nui.interact(r, Id::unique(("adv_btn", nid)), Sense::click());
+            if resp.hovered() {
+                nui.painter().rect_filled(
+                    r.shrink2(vec2(6.0, 0.0)),
+                    4.0,
+                    Color32::from_white_alpha(8),
+                );
+            }
+            if resp.clicked() {
+                ctx.data_mut(|d| d.insert_temp(adv_id, !adv_open));
+            }
+        }
+
         // Outputs (exec rows only for flow blocks)
-        for pin in def.outputs.iter() {
+        let dyn_outs = cmd_info.get(&nid).map(|c| c.1.clone());
+        let outputs: &[blocks::PinDef] = dyn_outs.as_deref().unwrap_or(&def.outputs);
+        for pin in outputs.iter() {
             if pin.ty == PinType::Exec && header_next {
                 continue;
             }
             let r = row(&mut nui, |ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let mut txt = egui::RichText::new(tl(pin.label)).size(11.5);
+                    let mut txt = egui::RichText::new(pin.label.text()).size(11.5);
                     if pin.ty == PinType::Exec {
                         txt = txt.color(theme::GREEN);
                     }
@@ -1088,11 +1169,10 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 fill,
                 Stroke::new(1.0, Color32::WHITE.gamma_multiply(0.6)),
             );
-            sui.painter().text(
-                m,
-                egui::Align2::CENTER_CENTER,
-                "✕",
-                FontId::proportional(11.0),
+            crate::ui::icons::paint(
+                sui.painter(),
+                Rect::from_center_size(m, vec2(9.0, 9.0)),
+                crate::ui::icons::Icon::Close,
                 Color32::WHITE,
             );
             if resp.clicked() {
@@ -1553,6 +1633,30 @@ pub fn fit_view(app: &mut App, rect: Rect) {
     }
 }
 
+/// Square toolbar button with an icon; `active` highlights it.
+fn tool_icon(ui: &mut Ui, icon: crate::ui::icons::Icon, active: bool) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(vec2(32.0, 30.0), Sense::click());
+    let fill = if resp.hovered() {
+        Color32::from_rgb(0x30, 0x33, 0x39)
+    } else {
+        Color32::from_rgb(0x26, 0x28, 0x2D)
+    };
+    let stroke = if active {
+        theme::ACCENT.gamma_multiply(0.7)
+    } else {
+        Color32::from_rgb(0x44, 0x47, 0x4E)
+    };
+    ui.painter()
+        .rect(r, 6.0, fill, Stroke::new(1.0, stroke), StrokeKind::Inside);
+    crate::ui::icons::paint(
+        ui.painter(),
+        r.shrink2(vec2(8.5, 7.5)),
+        icon,
+        if active { theme::ACCENT } else { theme::TEXT },
+    );
+    resp
+}
+
 fn toolbar(app: &mut App, ui: &mut Ui, rect: Rect, to_scene: TSTransform) {
     let pos = rect.left_bottom() + vec2(14.0, -48.0);
     egui::Area::new(Id::unique("canvas_toolbar"))
@@ -1561,9 +1665,13 @@ fn toolbar(app: &mut App, ui: &mut Ui, rect: Rect, to_scene: TSTransform) {
         .show(ui.ctx(), |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                if widgets::tool_button(ui, &format!("➕ {}", t("Block", "Block")))
-                    .on_hover_text(t("Block hinzufügen (Leertaste)", "Add block (space)"))
-                    .clicked()
+                if crate::ui::icons::button(
+                    ui,
+                    Some(crate::ui::icons::Icon::Plus),
+                    t("Block", "Block"),
+                )
+                .on_hover_text(t("Block hinzufügen (Leertaste)", "Add block (space)"))
+                .clicked()
                 {
                     let c = rect.center();
                     app.palette = Some(Palette {
@@ -1575,9 +1683,13 @@ fn toolbar(app: &mut App, ui: &mut Ui, rect: Rect, to_scene: TSTransform) {
                         just_opened: true,
                     });
                 }
-                if widgets::tool_button(ui, &format!("🗒 {}", t("Notiz", "Note")))
-                    .on_hover_text(t("Notiz-Rahmen hinzufügen", "Add a note frame"))
-                    .clicked()
+                if crate::ui::icons::button(
+                    ui,
+                    Some(crate::ui::icons::Icon::Note),
+                    t("Notiz", "Note"),
+                )
+                .on_hover_text(t("Notiz-Rahmen hinzufügen", "Add a note frame"))
+                .clicked()
                 {
                     let c = to_scene * rect.center();
                     let id = app.project.alloc_id();
@@ -1593,25 +1705,7 @@ fn toolbar(app: &mut App, ui: &mut Ui, rect: Rect, to_scene: TSTransform) {
                     app.selection.clear();
                 }
                 let snap = app.settings.snap;
-                let snap_btn = ui
-                    .add(
-                        egui::Button::new(egui::RichText::new("#").size(14.0).color(if snap {
-                            theme::ACCENT
-                        } else {
-                            theme::TEXT_WEAK
-                        }))
-                        .fill(Color32::from_rgb(0x26, 0x28, 0x2D))
-                        .stroke(Stroke::new(
-                            1.0,
-                            if snap {
-                                theme::ACCENT.gamma_multiply(0.6)
-                            } else {
-                                Color32::from_rgb(0x3A, 0x3D, 0x43)
-                            },
-                        ))
-                        .corner_radius(6)
-                        .min_size(vec2(32.0, 30.0)),
-                    )
+                let snap_btn = tool_icon(ui, crate::ui::icons::Icon::Grid, snap)
                     .on_hover_text(t("Am Raster ausrichten", "Snap to grid"));
                 if snap_btn.clicked() {
                     app.settings.snap = !snap;
@@ -1625,19 +1719,25 @@ fn toolbar(app: &mut App, ui: &mut Ui, rect: Rect, to_scene: TSTransform) {
                     view.zoom = nz.clamp(0.25, 1.6);
                     view.pan = c - scene * view.zoom;
                 };
-                if widgets::tool_button(ui, "−").clicked() {
+                if tool_icon(ui, crate::ui::icons::Icon::Minus, false)
+                    .on_hover_text(t("Verkleinern", "Zoom out"))
+                    .clicked()
+                {
                     zoom_to(app, zoom / 1.2);
                 }
-                if widgets::tool_button(ui, &format!("{:.0}%", zoom * 100.0))
+                if crate::ui::icons::button(ui, None, &format!("{:.0}%", zoom * 100.0))
                     .on_hover_text(t("Auf 100 % setzen", "Reset to 100 %"))
                     .clicked()
                 {
                     zoom_to(app, 1.0);
                 }
-                if widgets::tool_button(ui, "+").clicked() {
+                if tool_icon(ui, crate::ui::icons::Icon::Plus, false)
+                    .on_hover_text(t("Vergrößern", "Zoom in"))
+                    .clicked()
+                {
                     zoom_to(app, zoom * 1.2);
                 }
-                if widgets::tool_button(ui, "⛶")
+                if tool_icon(ui, crate::ui::icons::Icon::Expand, false)
                     .on_hover_text(t("Alles anzeigen (F)", "Fit all (F)"))
                     .clicked()
                 {

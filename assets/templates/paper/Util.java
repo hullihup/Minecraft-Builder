@@ -21,7 +21,14 @@ import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
 import org.bukkit.Particle;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.scoreboard.Criteria;
+import org.bukkit.scoreboard.DisplaySlot;
+import org.bukkit.scoreboard.Objective;
+import org.bukkit.scoreboard.Scoreboard;
+import net.kyori.adventure.bossbar.BossBar;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
@@ -194,5 +201,120 @@ __COMMON__
             return;
         }
         l.getWorld().spawnParticle(type, l, Math.max(1, (int) count), 0.3, 0.3, 0.3, 0.0);
+    }
+
+    // ----- commands -------------------------------------------------------------
+
+    public static Player findPlayer(String name) {
+        return name == null || name.isEmpty() ? null : Bukkit.getPlayerExact(name);
+    }
+
+    /** Tab completion: options per argument index, "@players" = online player names. */
+    public static List<String> tabArgs(String[] args, String[][] options) {
+        List<String> out = new ArrayList<>();
+        int idx = args.length - 1;
+        if (idx < 0 || idx >= options.length) return out;
+        String cur = args[idx].toLowerCase(Locale.ROOT);
+        for (String o : options[idx]) {
+            if (o.equals("@players")) {
+                for (Player p : Bukkit.getOnlinePlayers()) {
+                    if (p.getName().toLowerCase(Locale.ROOT).startsWith(cur)) out.add(p.getName());
+                }
+            } else if (o.toLowerCase(Locale.ROOT).startsWith(cur)) {
+                out.add(o);
+            }
+        }
+        return out;
+    }
+
+    // ----- more blocks ----------------------------------------------------------
+
+    public static void bossbar(Player p, String text, double percent, double seconds, String color) {
+        BossBar bar = BossBar.bossBar(color(text), (float) Math.max(0, Math.min(1, percent / 100.0)),
+                BossBar.Color.valueOf(color), BossBar.Overlay.PROGRESS);
+        p.showBossBar(bar);
+        Bukkit.getScheduler().runTaskLater(__MAIN__.INSTANCE, () -> p.hideBossBar(bar), Math.max(1L, (long) (seconds * 20)));
+    }
+
+    public static void sidebar(Player p, String title, String lines) {
+        Scoreboard sb = Bukkit.getScoreboardManager().getNewScoreboard();
+        Objective o = sb.registerNewObjective("mcb", Criteria.DUMMY, color(title));
+        o.setDisplaySlot(DisplaySlot.SIDEBAR);
+        String[] ls = lines == null ? new String[0] : lines.split("\\|");
+        for (int i = 0; i < ls.length && i < 15; i++) {
+            String entry = LegacyComponentSerializer.legacySection().serialize(color(ls[i])) + "\u00a7" + Integer.toHexString(i);
+            o.getScore(entry).setScore(ls.length - i);
+        }
+        p.setScoreboard(sb);
+    }
+
+    public static void setFly(Player p, boolean allow) {
+        p.setAllowFlight(allow);
+        if (!allow) p.setFlying(false);
+    }
+
+    public static double countItems(Player p, String id) {
+        Material m = Material.matchMaterial(id == null ? "" : id.trim());
+        if (m == null) return 0;
+        int n = 0;
+        for (ItemStack is : p.getInventory().getContents()) {
+            if (is != null && is.getType() == m) n += is.getAmount();
+        }
+        return n;
+    }
+
+    public static boolean takeItems(Player p, String id, double amount) {
+        Material m = Material.matchMaterial(id == null ? "" : id.trim());
+        int need = Math.max(1, (int) amount);
+        if (m == null || countItems(p, id) < need) return false;
+        p.getInventory().removeItem(new ItemStack(m, need));
+        return true;
+    }
+
+    public static void weather(String world, String type) {
+        World w = world(world);
+        w.setStorm(!type.equals("clear"));
+        w.setThundering(type.equals("thunder"));
+        w.setWeatherDuration(20 * 60 * 10);
+    }
+
+    public static Player randomPlayer() {
+        List<Player> all = new ArrayList<>(Bukkit.getOnlinePlayers());
+        return all.isEmpty() ? null : all.get(java.util.concurrent.ThreadLocalRandom.current().nextInt(all.size()));
+    }
+
+    public static double distance(Location a, Location b) {
+        if (a == null || b == null || a.getWorld() != b.getWorld()) return -1;
+        return a.distance(b);
+    }
+
+    /** Inventory holder that marks menus opened by "Open menu". */
+    public static final class MenuHolder implements InventoryHolder {
+        public final String id;
+        private Inventory inventory;
+
+        MenuHolder(String id) {
+            this.id = id;
+        }
+
+        @Override
+        public Inventory getInventory() {
+            return inventory;
+        }
+    }
+
+    public static void openMenu(Player p, String id, String title, double rows, String items) {
+        MenuHolder holder = new MenuHolder(id);
+        int size = 9 * Math.max(1, Math.min(6, (int) rows));
+        Inventory inv = Bukkit.createInventory(holder, size, color(title));
+        holder.inventory = inv;
+        for (String line : items.split("\n")) {
+            String[] e = menuLine(line);
+            if (e == null) continue;
+            int slot = (int) num(e[0]);
+            if (slot < 0 || slot >= size) continue;
+            inv.setItem(slot, customItem(e[1], 1, "", e[2], e[3]));
+        }
+        p.openInventory(inv);
     }
 }

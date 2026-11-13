@@ -122,7 +122,14 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                             egui::TextEdit::singleline(folder)
                                 .desired_width(ui.available_width() - 40.0),
                         );
-                        if ui.button("📁").clicked() {
+                        if crate::ui::icons::icon_button(
+                            ui,
+                            crate::ui::icons::Icon::Folder,
+                            26.0,
+                            "",
+                        )
+                        .clicked()
+                        {
                             if let Some(d) = rfd::FileDialog::new()
                                 .set_directory(folder.as_str())
                                 .pick_folder()

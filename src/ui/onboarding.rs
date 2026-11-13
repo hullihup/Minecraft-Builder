@@ -158,7 +158,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                             let w = (ui.available_width() - 16.0) / 2.0;
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 16.0;
-                                if big_choice(ui, t("🎓 Tutorial starten", "🎓 Start tutorial"), t("Empfohlen für den Anfang", "Recommended for beginners"), false, w).clicked() {
+                                if big_choice(ui, t("Tutorial starten", "Start tutorial"), t("Empfohlen für den Anfang", "Recommended for beginners"), false, w).clicked() {
                                     finish(app);
                                     start_tutorial(app);
                                     done = true;

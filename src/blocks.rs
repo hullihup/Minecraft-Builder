@@ -12,6 +12,7 @@
 use crate::i18n::L;
 use crate::model::Platform;
 use egui::Color32;
+use std::borrow::Cow;
 use std::sync::OnceLock;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -187,6 +188,23 @@ impl Cat {
             Cat::Server => Color32::from_rgb(0x9A, 0xA4, 0xB2),
         }
     }
+    pub fn icon_kind(self) -> crate::ui::icons::Icon {
+        use crate::ui::icons::Icon as I;
+        match self {
+            Cat::Events => I::Bolt,
+            Cat::Messages => I::Message,
+            Cat::Player => I::User,
+            Cat::World => I::Globe,
+            Cat::Flow => I::Branch,
+            Cat::Logic => I::Scale,
+            Cat::Math => I::Sigma,
+            Cat::Text => I::Text,
+            Cat::Data => I::Database,
+            Cat::Resources => I::Image,
+            Cat::Server => I::Server,
+        }
+    }
+    #[allow(dead_code)]
     pub fn icon(self) -> &'static str {
         match self {
             Cat::Events => "⚡",
@@ -206,11 +224,48 @@ impl Cat {
 
 #[derive(Clone, Debug)]
 pub struct PinDef {
-    pub id: &'static str,
-    pub label: L,
+    pub id: Cow<'static, str>,
+    pub label: Label,
     pub ty: PinType,
     /// Inline default value for unconnected Text/Number/Bool inputs.
     pub default: &'static str,
+    /// Optional input that is folded away under "more options" on the block.
+    pub advanced: bool,
+}
+
+/// Pin label: fixed bilingual text, or a dynamic one (command options).
+#[derive(Clone, Debug)]
+pub enum Label {
+    S(L),
+    D(String),
+}
+
+impl Label {
+    pub fn text(&self) -> &str {
+        match self {
+            Label::S(l) => crate::i18n::tl(*l),
+            Label::D(s) => s,
+        }
+    }
+    /// German text, used in problem messages.
+    pub fn de(&self) -> &str {
+        match self {
+            Label::S(l) => l.0,
+            Label::D(s) => s,
+        }
+    }
+}
+
+impl PinDef {
+    pub fn exec(id: &'static str) -> Self {
+        PinDef {
+            id: Cow::Borrowed(id),
+            label: Label::S(("", "")),
+            ty: PinType::Exec,
+            default: "",
+            advanced: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -322,34 +377,14 @@ fn b(id: &'static str, cat: Cat, kind: Kind, name: L, desc: L) -> B {
     };
     match kind {
         Kind::Action => {
-            d.inputs.push(PinDef {
-                id: "in",
-                label: ("", ""),
-                ty: PinType::Exec,
-                default: "",
-            });
-            d.outputs.push(PinDef {
-                id: "next",
-                label: ("", ""),
-                ty: PinType::Exec,
-                default: "",
-            });
+            d.inputs.push(PinDef::exec("in"));
+            d.outputs.push(PinDef::exec("next"));
         }
         Kind::Flow => {
-            d.inputs.push(PinDef {
-                id: "in",
-                label: ("", ""),
-                ty: PinType::Exec,
-                default: "",
-            });
+            d.inputs.push(PinDef::exec("in"));
         }
         Kind::Event => {
-            d.outputs.push(PinDef {
-                id: "next",
-                label: ("", ""),
-                ty: PinType::Exec,
-                default: "",
-            });
+            d.outputs.push(PinDef::exec("next"));
         }
         Kind::Value => {}
     }
@@ -359,19 +394,32 @@ fn b(id: &'static str, cat: Cat, kind: Kind, name: L, desc: L) -> B {
 impl B {
     fn i(mut self, id: &'static str, label: L, ty: PinType, default: &'static str) -> Self {
         self.0.inputs.push(PinDef {
-            id,
-            label,
+            id: Cow::Borrowed(id),
+            label: Label::S(label),
             ty,
             default,
+            advanced: false,
+        });
+        self
+    }
+    /// Optional input, folded away on the block until opened or connected.
+    fn ia(mut self, id: &'static str, label: L, ty: PinType, default: &'static str) -> Self {
+        self.0.inputs.push(PinDef {
+            id: Cow::Borrowed(id),
+            label: Label::S(label),
+            ty,
+            default,
+            advanced: true,
         });
         self
     }
     fn o(mut self, id: &'static str, label: L, ty: PinType) -> Self {
         self.0.outputs.push(PinDef {
-            id,
-            label,
+            id: Cow::Borrowed(id),
+            label: Label::S(label),
             ty,
             default: "",
+            advanced: false,
         });
         self
     }
@@ -386,6 +434,7 @@ impl B {
         self
     }
     /// Field that is only shown in the inspector.
+    #[allow(dead_code)]
     fn fa(mut self, id: &'static str, label: L, kind: FieldKind, default: &'static str) -> Self {
         self.0.fields.push(FieldDef {
             id,
@@ -497,6 +546,27 @@ const ROUND_OPS: &[(&str, L)] = &[
     ("round", ("Runden", "Round")),
     ("floor", ("Abrunden", "Floor")),
     ("ceil", ("Aufrunden", "Ceil")),
+];
+
+const BOSS_COLORS: &[(&str, L)] = &[
+    ("PINK", ("Rosa", "Pink")),
+    ("BLUE", ("Blau", "Blue")),
+    ("RED", ("Rot", "Red")),
+    ("GREEN", ("Grün", "Green")),
+    ("YELLOW", ("Gelb", "Yellow")),
+    ("PURPLE", ("Lila", "Purple")),
+    ("WHITE", ("Weiß", "White")),
+];
+
+const WEATHER: &[(&str, L)] = &[
+    ("clear", ("Sonne", "Clear")),
+    ("rain", ("Regen", "Rain")),
+    ("thunder", ("Gewitter", "Thunder")),
+];
+
+const CASES: &[(&str, L)] = &[
+    ("upper", ("GROSSBUCHSTABEN", "UPPERCASE")),
+    ("lower", ("kleinbuchstaben", "lowercase")),
 ];
 
 fn build_all() -> Vec<BlockDef> {
@@ -651,24 +721,10 @@ fn build_all() -> Vec<BlockDef> {
     v.push(
         b("ev_command", C::Events, K::Event,
             ("Befehl", "Command"),
-            ("Registriert einen Chat-Befehl wie /heal. Argumente werden durch Leerzeichen getrennt.",
-             "Registers a chat command like /heal. Arguments are split by spaces."))
+            ("Läuft, wenn jemand den Befehl eingibt. Name, Optionen und Rechte stellst du im Befehle-Fenster ein; die Optionen sind die Ausgänge dieses Blocks.",
+             "Runs when someone types the command. Name, options and permissions are set in the commands window; the options are this block's outputs."))
             .special(Special::Command)
-            .f("name", ("Befehl", "Command"), F::Text, "hallo")
-            .f("description", ("Beschreibung", "Description"), F::Text, "Ein eigener Befehl")
-            .f("op", ("Nur für OPs", "OPs only"), F::Bool, "false")
-            .f("players_only", ("Nur Spieler", "Players only"), F::Bool, "true")
-            .fa("aliases", ("Aliase", "Aliases"), F::Text, "")
-            .fa("permission", ("Berechtigung", "Permission"), F::Text, "")
-            .fa("min_args", ("Min. Argumente", "Min. arguments"), F::Number, "0")
-            .fa("usage", ("Hilfetext", "Usage text"), F::Text, "&cBenutzung: /<befehl> <argument>")
-            .fa("suggest", ("Vorschläge (Tab)", "Suggestions (tab)"), F::Text, "")
             .o("player", p_player, T::Player)
-            .o("arg1", ("Argument 1", "Argument 1"), T::Text)
-            .o("arg2", ("Argument 2", "Argument 2"), T::Text)
-            .o("arg3", ("Argument 3", "Argument 3"), T::Text)
-            .o("args", ("Alle Argumente", "All arguments"), T::Text)
-            .o("argc", ("Anzahl Argumente", "Argument count"), T::Number)
             .paper_empty()
             .fabric_empty(),
     );
@@ -741,8 +797,8 @@ fn build_all() -> Vec<BlockDef> {
         )
         .i("player", p_player, T::Player, "")
         .i("title", ("Titel", "Title"), T::Text, "&6Willkommen")
-        .i("subtitle", ("Untertitel", "Subtitle"), T::Text, "")
-        .i("seconds", ("Sekunden", "Seconds"), T::Number, "3")
+        .ia("subtitle", ("Untertitel", "Subtitle"), T::Text, "")
+        .ia("seconds", ("Sekunden", "Seconds"), T::Number, "3")
         .paper("Util.title(${in:player}, ${in:title}, ${in:subtitle}, ${in:seconds});")
         .fabric("Util.title(${in:player}, ${in:title}, ${in:subtitle}, ${in:seconds});"),
     );
@@ -870,7 +926,7 @@ fn build_all() -> Vec<BlockDef> {
         .i("player", p_player, T::Player, "")
         .i("effect", ("Effekt", "Effect"), T::Text, "speed")
         .i("seconds", ("Sekunden", "Seconds"), T::Number, "30")
-        .i("level", ("Stufe", "Level"), T::Number, "1")
+        .ia("level", ("Stufe", "Level"), T::Number, "1")
         .both("Util.effect(${in:player}, ${in:effect}, ${in:seconds}, ${in:level});"),
     );
     v.push(
@@ -969,8 +1025,8 @@ fn build_all() -> Vec<BlockDef> {
             T::Text,
             "entity.experience_orb.pickup",
         )
-        .i("volume", ("Lautstärke", "Volume"), T::Number, "1")
-        .i("pitch", ("Tonhöhe", "Pitch"), T::Number, "1")
+        .ia("volume", ("Lautstärke", "Volume"), T::Number, "1")
+        .ia("pitch", ("Tonhöhe", "Pitch"), T::Number, "1")
         .both("Util.sound(${in:player}, ${in:sound}, ${in:volume}, ${in:pitch});"),
     );
     v.push(
@@ -1721,8 +1777,8 @@ fn build_all() -> Vec<BlockDef> {
             .i("player", p_player, T::Player, "")
             .i("item", ("Basis-Item", "Base item"), T::Text, "minecraft:stick")
             .i("name", ("Name", "Name"), T::Text, "&6Zauberstab")
-            .i("lore", ("Beschreibung", "Lore"), T::Text, "&7Ein magischer Stab")
-            .i("amount", ("Anzahl", "Amount"), T::Number, "1")
+            .ia("lore", ("Beschreibung", "Lore"), T::Text, "&7Ein magischer Stab")
+            .ia("amount", ("Anzahl", "Amount"), T::Number, "1")
             .both("Util.giveCustom(${in:player}, ${in:item}, ${in:amount}, ${s:model}, ${in:name}, ${in:lore});"),
     );
     v.push(
@@ -1778,12 +1834,307 @@ fn build_all() -> Vec<BlockDef> {
         .both("Util.particles(${in:loc}, ${in:type}, ${in:count});"),
     );
 
+    // ------------------------------------------------------------ More blocks
+    v.push(
+        b("ev_kill", C::Events, K::Event,
+            ("Spieler tötet Mob", "Player kills mob"),
+            ("Wird ausgelöst, wenn ein Spieler ein Tier oder Monster tötet.", "Fires when a player kills an animal or monster."))
+            .o("player", p_player, T::Player)
+            .o("mob", ("Mob-Typ", "Mob type"), T::Text)
+            .o("loc", ("Position", "Location"), T::Location)
+            .listener("org.bukkit.event.entity.EntityDeathEvent", false)
+            .paper("if (event.getEntity().getKiller() == null) return;")
+            .pout("player", "event.getEntity().getKiller()")
+            .pout("mob", "event.getEntity().getType().getKey().toString()")
+            .pout("loc", "event.getEntity().getLocation()")
+            .fabric("ServerEntityCombatEvents.AFTER_KILLED_OTHER_ENTITY.register((__level, __killer, __killed, __src) -> {\n    if (!(__killer instanceof ServerPlayer)) return;\n${body}\n});")
+            .fout("player", "(ServerPlayer) __killer")
+            .fout("mob", "BuiltInRegistries.ENTITY_TYPE.getKey(__killed.getType()).toString()")
+            .fout("loc", "Loc.of(__killed)")
+            .fimp("net.fabricmc.fabric.api.entity.event.v1.ServerEntityCombatEvents"),
+    );
+    v.push(
+        b("cooldown", C::Flow, K::Flow,
+            ("Cooldown", "Cooldown"),
+            ("Lässt den Ablauf pro Spieler nur alle X Sekunden durch. Sonst geht es bei „Noch warten“ weiter (z. B. mit einer Nachricht).",
+             "Lets the flow through only every X seconds per player. Otherwise it continues at “Still waiting” (e.g. with a message)."))
+            .i("player", p_player, T::Player, "")
+            .i("seconds", ("Sekunden", "Seconds"), T::Number, "10")
+            .ia("key", ("Name", "Key"), T::Text, "standard")
+            .o("ready", ("Bereit", "Ready"), T::Exec)
+            .o("wait", ("Noch warten", "Still waiting"), T::Exec)
+            .o("left", ("Rest-Sekunden", "Seconds left"), T::Number)
+            .both("final double ${out:left} = Util.cooldown(Util.uuid(${in:player}) + \":\" + ${in:key}, ${in:seconds});\nif (${out:left} <= 0) {\n${exec:ready}\n} else {\n${exec:wait}\n}"),
+    );
+    v.push(
+        b(
+            "bossbar",
+            C::Messages,
+            K::Action,
+            ("Bossbar anzeigen", "Show boss bar"),
+            (
+                "Zeigt oben eine Leiste mit Text, z. B. für Countdowns oder Fortschritt.",
+                "Shows a bar at the top with text, e.g. for countdowns or progress.",
+            ),
+        )
+        .i("player", p_player, T::Player, "")
+        .i("text", ("Text", "Text"), T::Text, "&6Event startet bald!")
+        .i("percent", ("Füllung %", "Fill %"), T::Number, "100")
+        .ia("seconds", ("Sekunden", "Seconds"), T::Number, "5")
+        .f(
+            "color",
+            ("Farbe", "Color"),
+            F::Choice(BOSS_COLORS),
+            "YELLOW",
+        )
+        .both(
+            "Util.bossbar(${in:player}, ${in:text}, ${in:percent}, ${in:seconds}, \"${f:color}\");",
+        ),
+    );
+    v.push(
+        b("tablist", C::Messages, K::Action,
+            ("Tab-Liste beschriften", "Set tab list text"),
+            ("Setzt den Text über und unter der Spielerliste (Tab-Taste).", "Sets the text above and below the player list (Tab key)."))
+            .i("player", p_player, T::Player, "")
+            .i("header", ("Oben", "Header"), T::Text, "&6Mein Server")
+            .i("footer", ("Unten", "Footer"), T::Text, "&7Viel Spaß!")
+            .paper("${in:player}.sendPlayerListHeaderAndFooter(Util.color(${in:header}), Util.color(${in:footer}));")
+            .fabric("${in:player}.connection.send(new net.minecraft.network.protocol.game.ClientboundTabListPacket(Util.color(${in:header}), Util.color(${in:footer})));"),
+    );
+    v.push(
+        b("sidebar", C::Messages, K::Action,
+            ("Seitenleiste (Scoreboard)", "Sidebar (scoreboard)"),
+            ("Zeigt rechts eine Liste mit Titel. Zeilen mit | trennen, z. B. „&7Punkte: &e5|&7Online: &a3“. Nur Paper.",
+             "Shows a list with a title on the right. Separate lines with |, e.g. “&7Points: &e5|&7Online: &a3”. Paper only."))
+            .i("player", p_player, T::Player, "")
+            .i("title", ("Titel", "Title"), T::Text, "&6&lMein Server")
+            .i("lines", ("Zeilen", "Lines"), T::Text, "&7Willkommen!|&7Online: &a1")
+            .paper("Util.sidebar(${in:player}, ${in:title}, ${in:lines});"),
+    );
+    v.push(
+        b("sidebar_hide", C::Messages, K::Action,
+            ("Seitenleiste entfernen", "Remove sidebar"),
+            ("Entfernt die Seitenleiste wieder. Nur Paper.", "Removes the sidebar again. Paper only."))
+            .i("player", p_player, T::Player, "")
+            .paper("${in:player}.setScoreboard(org.bukkit.Bukkit.getScoreboardManager().getMainScoreboard());"),
+    );
+    v.push(
+        b(
+            "fly",
+            C::Player,
+            K::Action,
+            ("Fliegen erlauben", "Allow flying"),
+            (
+                "Erlaubt oder verbietet das Fliegen (wie im Kreativmodus).",
+                "Allows or forbids flying (like in creative mode).",
+            ),
+        )
+        .i("player", p_player, T::Player, "")
+        .i("allow", ("Erlaubt", "Allowed"), T::Bool, "true")
+        .both("Util.setFly(${in:player}, ${in:allow});"),
+    );
+    v.push(
+        b(
+            "count_items",
+            C::Player,
+            K::Value,
+            ("Anzahl Items", "Item count"),
+            (
+                "Wie viele Items dieser Art der Spieler im Inventar hat.",
+                "How many items of this kind the player has.",
+            ),
+        )
+        .i("player", p_player, T::Player, "")
+        .i("item", ("Item-ID", "Item id"), T::Text, "minecraft:diamond")
+        .o("count", ("Anzahl", "Count"), T::Number)
+        .bout("count", "Util.countItems(${in:player}, ${in:item})"),
+    );
+    v.push(
+        b("take_items", C::Player, K::Action,
+            ("Items abziehen", "Take items"),
+            ("Nimmt dem Spieler Items weg – nur wenn er genug hat. „Geklappt“ sagt, ob es funktioniert hat (gut für Shops).",
+             "Takes items from the player – only if they have enough. “Worked” tells whether it worked (good for shops)."))
+            .i("player", p_player, T::Player, "")
+            .i("item", ("Item-ID", "Item id"), T::Text, "minecraft:diamond")
+            .i("amount", ("Anzahl", "Amount"), T::Number, "1")
+            .o("ok", ("Geklappt", "Worked"), T::Bool)
+            .both("final boolean ${out:ok} = Util.takeItems(${in:player}, ${in:item}, ${in:amount});"),
+    );
+    v.push(
+        b(
+            "weather",
+            C::World,
+            K::Action,
+            ("Wetter setzen", "Set weather"),
+            (
+                "Ändert das Wetter in einer Welt.",
+                "Changes the weather in a world.",
+            ),
+        )
+        .i("world", ("Welt", "World"), T::Text, "world")
+        .f("type", ("Wetter", "Weather"), F::Choice(WEATHER), "clear")
+        .both("Util.weather(${in:world}, \"${f:type}\");"),
+    );
+    v.push(
+        b(
+            "random_player",
+            C::Server,
+            K::Value,
+            ("Zufälliger Spieler", "Random player"),
+            (
+                "Ein zufälliger Online-Spieler (leer, wenn niemand online ist).",
+                "A random online player (empty if nobody is online).",
+            ),
+        )
+        .o("player", p_player, T::Player)
+        .bout("player", "Util.randomPlayer()"),
+    );
+    v.push(
+        b(
+            "distance",
+            C::World,
+            K::Value,
+            ("Entfernung", "Distance"),
+            (
+                "Abstand zwischen zwei Positionen in Blöcken (-1 bei verschiedenen Welten).",
+                "Distance between two locations in blocks (-1 for different worlds).",
+            ),
+        )
+        .i("a", ("Von", "From"), T::Location, "")
+        .i("b", ("Nach", "To"), T::Location, "")
+        .o("dist", ("Blöcke", "Blocks"), T::Number)
+        .bout("dist", "Util.distance(${in:a}, ${in:b})"),
+    );
+    v.push(
+        b(
+            "text_replace",
+            C::Text,
+            K::Value,
+            ("Text ersetzen", "Replace text"),
+            (
+                "Ersetzt alle Vorkommen eines Stücks im Text.",
+                "Replaces every occurrence of a part in the text.",
+            ),
+        )
+        .i("text", ("Text", "Text"), T::Text, "")
+        .i("find", ("Suchen", "Find"), T::Text, "")
+        .i("with", ("Ersetzen durch", "Replace with"), T::Text, "")
+        .o("res", ("Text", "Text"), T::Text)
+        .bout("res", "${in:text}.replace(${in:find}, ${in:with})"),
+    );
+    v.push(
+        b("text_case", C::Text, K::Value,
+            ("Groß-/Kleinschreibung", "Upper/lower case"),
+            ("Wandelt Text in GROSS- oder kleinbuchstaben um.", "Turns text into UPPER or lower case."))
+            .i("text", ("Text", "Text"), T::Text, "")
+            .f("mode", ("Art", "Mode"), F::Choice(CASES), "upper")
+            .o("res", ("Text", "Text"), T::Text)
+            .bout("res", "(\"${f:mode}\".equals(\"upper\") ? ${in:text}.toUpperCase() : ${in:text}.toLowerCase())"),
+    );
+    v.push(
+        b("open_menu", C::Player, K::Action,
+            ("Menü öffnen", "Open menu"),
+            ("Öffnet ein Kisten-Menü mit Items, z. B. für Shops oder Teleporter. Eine Zeile pro Item: „Platz: item | Name | Beschreibung“, z. B. „13: minecraft:diamond | &bDiamant | &7Kostet 5 Gold“. Klicks fängst du mit „Klick im Menü“ ab. Nur Paper.",
+             "Opens a chest menu with items, e.g. for shops or teleporters. One line per item: “slot: item | name | lore”, e.g. “13: minecraft:diamond | &bDiamond | &7Costs 5 gold”. Catch clicks with “Menu click”. Paper only."))
+            .f("menu", ("Menü-Name", "Menu name"), F::Text, "shop")
+            .f("items", ("Items", "Items"), F::Multiline, "11: minecraft:diamond | &bDiamant\n15: minecraft:emerald | &aSmaragd")
+            .i("player", p_player, T::Player, "")
+            .i("title", ("Titel", "Title"), T::Text, "&8Shop")
+            .i("rows", ("Reihen", "Rows"), T::Number, "3")
+            .paper("Util.openMenu(${in:player}, ${s:menu}, ${in:title}, ${in:rows}, ${s:items});"),
+    );
+    v.push(
+        b("ev_menu_click", C::Events, K::Event,
+            ("Klick im Menü", "Menu click"),
+            ("Wird ausgelöst, wenn ein Spieler in einem Menü von „Menü öffnen“ klickt. Items können dort nicht herausgenommen werden. Nur Paper.",
+             "Fires when a player clicks in a menu from “Open menu”. Items can't be taken out. Paper only."))
+            .f("menu", ("Menü-Name", "Menu name"), F::Text, "shop")
+            .o("player", p_player, T::Player)
+            .o("slot", ("Platz", "Slot"), T::Number)
+            .o("item", ("Item-ID", "Item id"), T::Text)
+            .listener("org.bukkit.event.inventory.InventoryClickEvent", false)
+            .paper("if (!(event.getInventory().getHolder() instanceof Util.MenuHolder __mh) || !__mh.id.equals(${s:menu})) return;\n    event.setCancelled(true);\n    if (event.getClickedInventory() != event.getView().getTopInventory()) return;")
+            .pout("player", "(org.bukkit.entity.Player) event.getWhoClicked()")
+            .pout("slot", "event.getSlot()")
+            .pout("item", "Util.itemId(event.getCurrentItem())"),
+    );
+    v.push(
+        b(
+            "close_menu",
+            C::Player,
+            K::Action,
+            ("Menü schließen", "Close menu"),
+            (
+                "Schließt das offene Menü / Inventar des Spielers.",
+                "Closes the player's open menu / inventory.",
+            ),
+        )
+        .i("player", p_player, T::Player, "")
+        .paper("${in:player}.closeInventory();")
+        .fabric("${in:player}.closeContainer();"),
+    );
+
     v.into_iter().map(|b| b.0).collect()
 }
 
 pub fn all() -> &'static [BlockDef] {
     static ALL: OnceLock<Vec<BlockDef>> = OnceLock::new();
     ALL.get_or_init(build_all)
+}
+
+/// Pins of a placed block. Command blocks get one output per command option.
+pub struct Shape {
+    pub def: &'static BlockDef,
+    #[allow(dead_code)]
+    pub inputs: Cow<'static, [PinDef]>,
+    pub outputs: Cow<'static, [PinDef]>,
+}
+
+impl Shape {
+    pub fn input(&self, id: &str) -> Option<&PinDef> {
+        self.inputs.iter().find(|p| p.id == id)
+    }
+    pub fn output(&self, id: &str) -> Option<&PinDef> {
+        self.outputs.iter().find(|p| p.id == id)
+    }
+}
+
+pub fn opt_type(t: crate::model::OptType) -> PinType {
+    use crate::model::OptType as O;
+    match t {
+        O::Word | O::Text | O::Choice => PinType::Text,
+        O::Number | O::Integer => PinType::Number,
+        O::Player => PinType::Player,
+        O::Bool => PinType::Bool,
+    }
+}
+
+pub fn shape(node: &crate::model::Node, project: &crate::model::Project) -> Option<Shape> {
+    let def = get(&node.kind)?;
+    if def.special == Special::Command {
+        let mut outs: Vec<PinDef> = def.outputs.to_vec();
+        if let Some(c) = project.node_command(node) {
+            for (i, o) in c.options.iter().enumerate() {
+                outs.push(PinDef {
+                    id: Cow::Owned(crate::model::opt_pin(i)),
+                    label: Label::D(o.name.clone()),
+                    ty: opt_type(o.ty),
+                    default: "",
+                    advanced: false,
+                });
+            }
+        }
+        return Some(Shape {
+            def,
+            inputs: Cow::Borrowed(&def.inputs),
+            outputs: Cow::Owned(outs),
+        });
+    }
+    Some(Shape {
+        def,
+        inputs: Cow::Borrowed(&def.inputs),
+        outputs: Cow::Borrowed(&def.outputs),
+    })
 }
 
 pub fn get(id: &str) -> Option<&'static BlockDef> {

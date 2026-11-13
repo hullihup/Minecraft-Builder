@@ -5,6 +5,7 @@ use crate::examples::Starter;
 use crate::i18n::{t, tl};
 use crate::model::Platform;
 use crate::theme;
+use crate::ui::icons::{self, Icon};
 use egui::{
     Color32, CornerRadius, FontId, Id, Margin, Rect, RichText, Sense, Stroke, StrokeKind, Ui, pos2,
     vec2,
@@ -46,7 +47,7 @@ fn ago(t_: std::time::SystemTime) -> String {
     }
 }
 
-fn side_button(ui: &mut Ui, icon: &str, text: &str, primary: bool) -> egui::Response {
+fn side_button(ui: &mut Ui, icon: Icon, text: &str, primary: bool) -> egui::Response {
     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::click());
     let fill = if primary {
         if resp.hovered() {
@@ -74,11 +75,10 @@ fn side_button(ui: &mut Ui, icon: &str, text: &str, primary: bool) -> egui::Resp
         StrokeKind::Inside,
     );
     let fg = if primary { Color32::BLACK } else { theme::TEXT };
-    ui.painter().text(
-        r.left_center() + vec2(16.0, 0.0),
-        egui::Align2::LEFT_CENTER,
+    icons::paint(
+        ui.painter(),
+        Rect::from_center_size(r.left_center() + vec2(24.0, 0.0), vec2(16.0, 16.0)),
         icon,
-        FontId::proportional(16.0),
         fg,
     );
     ui.painter().text(
@@ -156,21 +156,35 @@ fn left_column(app: &mut App, ui: &mut Ui) {
         });
     });
     ui.add_space(26.0);
-    if side_button(ui, "＋", t("Neues Projekt", "New project"), true).clicked() {
+    if side_button(ui, Icon::Plus, t("Neues Projekt", "New project"), true).clicked() {
         app.new_project_dialog();
     }
     ui.add_space(8.0);
-    if side_button(ui, "📂", t("Projekt öffnen…", "Open project…"), false).clicked() {
+    if side_button(
+        ui,
+        Icon::Folder,
+        t("Projekt öffnen…", "Open project…"),
+        false,
+    )
+    .clicked()
+    {
         app.open_dialog();
     }
     ui.add_space(8.0);
-    if side_button(ui, "🎓", t("Tutorial starten", "Start tutorial"), false).clicked() {
+    if side_button(
+        ui,
+        Icon::Book,
+        t("Tutorial starten", "Start tutorial"),
+        false,
+    )
+    .clicked()
+    {
         crate::ui::onboarding::start_tutorial(app);
     }
     ui.add_space(8.0);
     if side_button(
         ui,
-        "⚙",
+        Icon::Gear,
         t("Einrichtung & Sprache", "Setup & language"),
         false,
     )
@@ -297,7 +311,7 @@ fn projects(app: &mut App, ui: &mut Ui) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut app.home_search)
-                    .hint_text(t("🔍 Projekte suchen…", "🔍 Search projects…"))
+                    .hint_text(t("Projekte suchen…", "Search projects…"))
                     .desired_width(240.0),
             );
         });

@@ -252,6 +252,130 @@ pub struct Project {
     pub settings: ProjectSettings,
     pub workspaces: Vec<Workspace>,
     pub next_id: NodeId,
+    /// Chat commands; each one becomes an event block "Command · /name".
+    #[serde(default)]
+    pub commands: Vec<CommandDef>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CmdAccess {
+    #[default]
+    Everyone,
+    Op,
+    Permission,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CmdSenders {
+    #[default]
+    Players,
+    Everyone,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum OptType {
+    /// One word.
+    #[default]
+    Word,
+    /// The rest of the message (only as last option).
+    Text,
+    Number,
+    Integer,
+    Player,
+    Bool,
+    /// One of a fixed list of words.
+    Choice,
+}
+
+impl OptType {
+    pub const ALL: [OptType; 7] = [
+        OptType::Word,
+        OptType::Text,
+        OptType::Number,
+        OptType::Integer,
+        OptType::Player,
+        OptType::Bool,
+        OptType::Choice,
+    ];
+    pub fn label(self) -> (&'static str, &'static str) {
+        match self {
+            OptType::Word => ("Wort", "Word"),
+            OptType::Text => ("Text (Rest)", "Text (rest)"),
+            OptType::Number => ("Zahl", "Number"),
+            OptType::Integer => ("Ganze Zahl", "Whole number"),
+            OptType::Player => ("Spieler", "Player"),
+            OptType::Bool => ("Ja/Nein", "Yes/No"),
+            OptType::Choice => ("Auswahl", "Choice"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CmdOption {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub ty: OptType,
+    #[serde(default = "yes")]
+    pub required: bool,
+    /// Choice values / tab suggestions.
+    #[serde(default)]
+    pub choices: Vec<String>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CommandDef {
+    pub id: NodeId,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub access: CmdAccess,
+    #[serde(default)]
+    pub permission: String,
+    #[serde(default)]
+    pub senders: CmdSenders,
+    #[serde(default)]
+    pub options: Vec<CmdOption>,
+}
+
+impl CommandDef {
+    pub fn new(id: NodeId, name: &str) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            description: String::new(),
+            aliases: vec![],
+            access: CmdAccess::Everyone,
+            permission: String::new(),
+            senders: CmdSenders::Players,
+            options: vec![],
+        }
+    }
+    /// How players type it, e.g. `/heal <spieler> [menge]`.
+    pub fn usage(&self) -> String {
+        let mut u = format!("/{}", self.name);
+        for o in &self.options {
+            if o.required {
+                u.push_str(&format!(" <{}>", o.name));
+            } else {
+                u.push_str(&format!(" [{}]", o.name));
+            }
+        }
+        u
+    }
+}
+
+/// Output pin id of a command option.
+pub fn opt_pin(index: usize) -> String {
+    format!("opt{index}")
 }
 
 impl Default for Project {
@@ -261,6 +385,7 @@ impl Default for Project {
             settings: ProjectSettings::default(),
             workspaces: vec![Workspace::new("Start")],
             next_id: 1,
+            commands: vec![],
         }
     }
 }
@@ -291,7 +416,112 @@ impl Project {
         if p.workspaces.is_empty() {
             p.workspaces.push(Workspace::new("Start"));
         }
+        p.next_id = p
+            .next_id
+            .max(p.commands.iter().map(|c| c.id + 1).max().unwrap_or(0));
+        p.migrate_commands();
         Ok(p)
+    }
+
+    pub fn command(&self, id: NodeId) -> Option<&CommandDef> {
+        self.commands.iter().find(|c| c.id == id)
+    }
+
+    /// Command of a command event node.
+    pub fn node_command(&self, node: &Node) -> Option<&CommandDef> {
+        node.values
+            .get("cmd")
+            .and_then(|v| v.parse().ok())
+            .and_then(|id| self.command(id))
+    }
+
+    /// Old projects stored commands in the block's fields: turn them into command definitions.
+    pub fn migrate_commands(&mut self) {
+        let mut new_cmds = vec![];
+        let mut next = self.next_id;
+        for ws in &mut self.workspaces {
+            let ws_links = ws.links.clone();
+            let ws = &mut *ws;
+            for n in ws
+                .nodes
+                .iter_mut()
+                .filter(|n| n.kind == "ev_command" && !n.values.contains_key("cmd"))
+            {
+                let get = |k: &str| n.values.get(k).cloned().unwrap_or_default();
+                let id = next;
+                next += 1;
+                let name: String = get("name").trim().trim_start_matches('/').to_lowercase();
+                let mut c = CommandDef::new(id, if name.is_empty() { "hallo" } else { &name });
+                c.description = get("description");
+                c.aliases = get("aliases")
+                    .split([',', ' '])
+                    .filter(|a| !a.trim().is_empty())
+                    .map(|a| a.trim().into())
+                    .collect();
+                if !get("permission").trim().is_empty() {
+                    c.access = CmdAccess::Permission;
+                    c.permission = get("permission").trim().into();
+                } else if get("op") == "true" {
+                    c.access = CmdAccess::Op;
+                }
+                if get("players_only") == "false" {
+                    c.senders = CmdSenders::Everyone;
+                }
+                let min: usize = get("min_args").parse::<f64>().unwrap_or(0.0) as usize;
+                let used: Vec<usize> = ws_links
+                    .iter()
+                    .filter(|l| l.from.node == n.id)
+                    .filter_map(|l| match l.from.pin.as_str() {
+                        "arg1" => Some(1),
+                        "arg2" => Some(2),
+                        "arg3" => Some(3),
+                        _ => None,
+                    })
+                    .collect();
+                let count = used.into_iter().max().unwrap_or(0).max(min).min(3);
+                for i in 0..count {
+                    c.options.push(CmdOption {
+                        name: format!("argument{}", i + 1),
+                        description: String::new(),
+                        ty: OptType::Word,
+                        required: i < min,
+                        choices: if i == 0 {
+                            get("suggest")
+                                .split(',')
+                                .map(|x| x.trim().to_string())
+                                .filter(|x| !x.is_empty())
+                                .collect()
+                        } else {
+                            vec![]
+                        },
+                    });
+                }
+                n.values.clear();
+                n.values.insert("cmd".into(), id.to_string());
+                new_cmds.push(c);
+            }
+        }
+        // Old pin names -> option pins.
+        for ws in &mut self.workspaces {
+            let cmd_nodes: Vec<NodeId> = ws
+                .nodes
+                .iter()
+                .filter(|n| n.kind == "ev_command")
+                .map(|n| n.id)
+                .collect();
+            for l in &mut ws.links {
+                if cmd_nodes.contains(&l.from.node) {
+                    match l.from.pin.as_str() {
+                        "arg1" => l.from.pin = opt_pin(0),
+                        "arg2" => l.from.pin = opt_pin(1),
+                        "arg3" => l.from.pin = opt_pin(2),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        self.next_id = next;
+        self.commands.extend(new_cmds);
     }
 
     pub fn save(&self, path: &std::path::Path) -> Result<(), String> {
