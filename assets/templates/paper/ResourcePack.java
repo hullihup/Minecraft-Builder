@@ -50,7 +50,7 @@ public final class ResourcePack {
             });
             server.setExecutor(Executors.newFixedThreadPool(2));
             server.start();
-            p.getLogger().info("Resource pack (" + (data.length / 1024) + " KB) is served on port " + port);
+            p.getLogger().info("Resource pack (" + Math.max(1, (data.length + 1023) / 1024) + " KB) is served on port " + port);
         } catch (Exception e) {
             p.getLogger().severe("Could not start the resource pack server: " + e);
         }
