@@ -49,6 +49,10 @@ pub struct CanvasState {
     pub focus_top_search: bool,
     pub rect: Rect,
     pub fit_request: bool,
+    /// The current link was started by a click (finish with a second click).
+    pub click_link: bool,
+    /// Selected wire (click on it; Del removes it).
+    pub selected_link: Option<Link>,
 }
 
 impl Default for CanvasState {
@@ -62,6 +66,8 @@ impl Default for CanvasState {
             focus_top_search: false,
             rect: Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)),
             fit_request: false,
+            click_link: false,
+            selected_link: None,
         }
     }
 }
@@ -77,6 +83,8 @@ enum NodeEvent {
     },
     DragStop,
     PinDrag(LinkDrag),
+    /// A pin was clicked: start a click-connection or finish one.
+    PinClick(LinkDrag),
     PinClear {
         node: NodeId,
         pin: String,
@@ -95,6 +103,36 @@ fn bezier(a: Pos2, b: Pos2, color: Color32, width: f32) -> Shape {
         Color32::TRANSPARENT,
         Stroke::new(width, color),
     ))
+}
+
+fn bezier_point(a: Pos2, b: Pos2, t: f32) -> Pos2 {
+    let dx = ((b.x - a.x).abs() * 0.5).clamp(40.0, 220.0);
+    let (p0, p1, p2, p3) = (a, a + vec2(dx, 0.0), b - vec2(dx, 0.0), b);
+    let u = 1.0 - t;
+    let w = [u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t];
+    pos2(
+        w[0] * p0.x + w[1] * p1.x + w[2] * p2.x + w[3] * p3.x,
+        w[0] * p0.y + w[1] * p1.y + w[2] * p2.y + w[3] * p3.y,
+    )
+}
+
+/// Approximate distance from `p` to the wire curve.
+fn bezier_distance(a: Pos2, b: Pos2, p: Pos2) -> f32 {
+    let bounds = Rect::from_two_pos(a, b).expand2(vec2(230.0, 12.0));
+    if !bounds.contains(p) {
+        return f32::MAX;
+    }
+    let mut best = f32::MAX;
+    let mut prev = a;
+    for i in 1..=32 {
+        let q = bezier_point(a, b, i as f32 / 32.0);
+        let seg = q - prev;
+        let len2 = seg.length_sq().max(1e-4);
+        let tt = ((p - prev).dot(seg) / len2).clamp(0.0, 1.0);
+        best = best.min((prev + seg * tt).distance(p));
+        prev = q;
+    }
+    best
 }
 
 fn exec_triangle(p: Pos2, filled: bool, color: Color32) -> Shape {
@@ -223,6 +261,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         .unwrap_or(false);
     let scene_layer = LayerId::new(ui.layer_id().order, ui.scope_id().with("scene"));
 
+    let left_selects = app.settings.left_drag_selects;
     {
         let view = app.views.entry(ws_idx).or_default();
         if pointer_in && !over_popup && app.palette.is_none() {
@@ -245,7 +284,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             }
         }
         let shift = ctx.input(|i| i.modifiers.shift || i.modifiers.command);
-        if bg_resp.drag_started_by(egui::PointerButton::Primary) && shift {
+        if bg_resp.drag_started_by(egui::PointerButton::Primary) && (shift != left_selects) {
             let origin = rect.min.to_vec2() + view.pan;
             if let Some(p) = bg_resp.interact_pointer_pos() {
                 app.canvas.box_start = Some(((p.to_vec2() - origin) / view.zoom).to_pos2());
@@ -621,12 +660,57 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 p.galley(title_pos, title_galley, theme::TEXT);
             }
             p.text(
-                hrect.right_center() - vec2(PAD_X + 10.0, 0.0),
+                hrect.right_center() - vec2(PAD_X + 24.0, 0.0),
                 egui::Align2::RIGHT_CENTER,
                 format!("#{}", node.id),
                 FontId::proportional(10.5),
                 theme::TEXT_WEAK,
             );
+        }
+        // "⋯" menu button (left click).
+        {
+            let mr = Rect::from_center_size(
+                hrect.right_center() - vec2(PAD_X + 6.0, 0.0),
+                vec2(18.0, 18.0),
+            );
+            let mresp = nui.interact(mr, Id::unique(("node_menu", nid)), Sense::click());
+            if mresp.hovered() {
+                nui.painter()
+                    .rect_filled(mr, 4.0, Color32::from_white_alpha(18));
+            }
+            nui.painter().text(
+                mr.center(),
+                egui::Align2::CENTER_CENTER,
+                "⋯",
+                FontId::proportional(14.0),
+                if mresp.hovered() {
+                    theme::TEXT
+                } else {
+                    theme::TEXT_WEAK
+                },
+            );
+            let mresp = mresp.on_hover_text(t("Block-Menü", "Block menu"));
+            egui::Popup::menu(&mresp).show(|ui| {
+                if ui.button(t("Duplizieren", "Duplicate")).clicked() {
+                    events.push(NodeEvent::Duplicate(nid));
+                    ui.close();
+                }
+                if ui
+                    .button(t("Alle Verbindungen trennen", "Disconnect all"))
+                    .clicked()
+                {
+                    events.push(NodeEvent::Disconnect(nid));
+                    ui.close();
+                }
+                ui.separator();
+                if ui
+                    .button(egui::RichText::new(t("Löschen", "Delete")).color(theme::RED))
+                    .clicked()
+                {
+                    events.push(NodeEvent::Delete(nid));
+                    ui.close();
+                }
+            });
         }
         if def.has_exec_in() {
             pin_list.push((
@@ -653,7 +737,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         let mut changed = false;
 
         // Fields
-        for f in &def.fields {
+        for f in def.fields.iter().filter(|f| !f.advanced) {
             let multiline = matches!(f.kind, blocks::FieldKind::Multiline);
             if multiline {
                 row(&mut nui, |ui| {
@@ -860,6 +944,14 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     ty,
                 }));
             }
+            if pr.clicked() && !ctx.input(|i| i.modifiers.alt) {
+                events.push(NodeEvent::PinClick(LinkDrag {
+                    node: nid,
+                    pin: pin.clone(),
+                    is_output: is_out,
+                    ty,
+                }));
+            }
             if pr.secondary_clicked() || (pr.clicked() && ctx.input(|i| i.modifiers.alt)) {
                 events.push(NodeEvent::PinClear {
                     node: nid,
@@ -877,9 +969,15 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                         t("Eingang", "Input")
                     },
                     if is_conn {
-                        t(" · Rechtsklick: trennen", " · right-click: disconnect")
+                        t(
+                            " · Klick: verbinden · Rechtsklick: trennen",
+                            " · click: connect · right-click: disconnect",
+                        )
                     } else {
-                        ""
+                        t(
+                            " · Klick oder Ziehen: verbinden",
+                            " · click or drag: connect",
+                        )
                     }
                 ));
             }
@@ -888,11 +986,58 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         let _ = changed;
     }
     app.canvas.sizes = new_sizes;
+    app.ui_rects.insert("canvas", rect);
+    {
+        let ws = &app.project.workspaces[ws_idx];
+        let first = ws
+            .nodes
+            .iter()
+            .filter(|n| {
+                blocks::get(&n.kind)
+                    .map(|d| d.kind == Kind::Event)
+                    .unwrap_or(false)
+            })
+            .min_by(|a, b| (a.pos[1] + a.pos[0] * 0.3).total_cmp(&(b.pos[1] + b.pos[0] * 0.3)));
+        if let Some(n) = first {
+            let size = app
+                .canvas
+                .sizes
+                .get(&n.id)
+                .copied()
+                .unwrap_or(vec2(260.0, 80.0));
+            let r = Rect::from_min_size(pos2(n.pos[0], n.pos[1]), size);
+            app.ui_rects.insert("first_event", to_screen * r);
+        } else {
+            app.ui_rects.remove("first_event");
+        }
+    }
 
     // ---------------------------------------------------------------- wires
+    let mut hovered_link: Option<Link> = None;
     {
         let ws = &app.project.workspaces[ws_idx];
         let mut shapes = vec![];
+        let mut best = f32::MAX;
+        let mut mid_of_selected = None;
+        for l in &ws.links {
+            let a = app
+                .canvas
+                .pins
+                .get(&(l.from.node, l.from.pin.clone(), true));
+            let b = app.canvas.pins.get(&(l.to.node, l.to.pin.clone(), false));
+            if let (Some((pa, _)), Some(_)) = (a, b) {
+                let pb = app.canvas.pins[&(l.to.node, l.to.pin.clone(), false)].0;
+                if let Some(ps) = pointer_scene {
+                    if pointer_in && !over_popup && app.canvas.link_drag.is_none() {
+                        let d = bezier_distance(*pa + vec2(6.0, 0.0), pb - vec2(6.0, 0.0), ps);
+                        if d < 7.0 && d < best {
+                            best = d;
+                            hovered_link = Some(l.clone());
+                        }
+                    }
+                }
+            }
+        }
         for l in &ws.links {
             let a = app
                 .canvas
@@ -900,22 +1045,66 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 .get(&(l.from.node, l.from.pin.clone(), true));
             let b = app.canvas.pins.get(&(l.to.node, l.to.pin.clone(), false));
             if let (Some((pa, ta)), Some((pb, _))) = (a, b) {
-                let hl = app.selection.contains(&l.from.node) || app.selection.contains(&l.to.node);
+                let sel = app.canvas.selected_link.as_ref() == Some(l);
+                let hov = hovered_link.as_ref() == Some(l);
+                let hl = sel
+                    || hov
+                    || app.selection.contains(&l.from.node)
+                    || app.selection.contains(&l.to.node);
                 let (col, w) = if *ta == PinType::Exec {
                     (theme::GREEN, 2.6)
                 } else {
                     (ta.color(), 2.0)
                 };
-                let col = if hl { col } else { col.gamma_multiply(0.8) };
-                shapes.push(bezier(
-                    *pa + vec2(6.0, 0.0),
-                    *pb - vec2(6.0, 0.0),
-                    col,
-                    if hl { w + 1.0 } else { w },
-                ));
+                let col = if sel || hov {
+                    Color32::WHITE.lerp_to_gamma(col, 0.45)
+                } else if hl {
+                    col
+                } else {
+                    col.gamma_multiply(0.8)
+                };
+                let a2 = *pa + vec2(6.0, 0.0);
+                let b2 = *pb - vec2(6.0, 0.0);
+                if sel {
+                    shapes.push(bezier(a2, b2, theme::ACCENT.gamma_multiply(0.35), w + 6.0));
+                    mid_of_selected = Some(bezier_point(a2, b2, 0.5));
+                }
+                shapes.push(bezier(a2, b2, col, if hl { w + 1.0 } else { w }));
             }
         }
         sui.painter().set(wires_slot, Shape::Vec(shapes));
+        // Delete button on the selected wire.
+        if let Some(m) = mid_of_selected {
+            let r = Rect::from_center_size(m, vec2(20.0, 20.0));
+            let resp = sui.interact(r, Id::unique("wire_delete"), Sense::click());
+            let fill = if resp.hovered() {
+                theme::RED
+            } else {
+                Color32::from_rgb(0x3A, 0x3D, 0x43)
+            };
+            sui.painter().circle(
+                m,
+                10.0,
+                fill,
+                Stroke::new(1.0, Color32::WHITE.gamma_multiply(0.6)),
+            );
+            sui.painter().text(
+                m,
+                egui::Align2::CENTER_CENTER,
+                "✕",
+                FontId::proportional(11.0),
+                Color32::WHITE,
+            );
+            if resp.clicked() {
+                if let Some(l) = app.canvas.selected_link.take() {
+                    app.project.workspaces[ws_idx].links.retain(|x| *x != l);
+                }
+            }
+            resp.on_hover_text(t("Verbindung löschen (Entf)", "Delete connection (Del)"));
+        }
+    }
+    if hovered_link.is_some() {
+        ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
     }
 
     // --------------------------------------------------------- link drag
@@ -1009,7 +1198,25 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     }
                 }
             }
+            NodeEvent::PinClick(d) => {
+                let ws = &mut app.project.workspaces[ws_idx];
+                match (&app.canvas.link_drag, app.canvas.click_link) {
+                    (Some(start), true) => {
+                        let cand = (d.node, d.pin.clone(), d.is_output, d.ty);
+                        if let Some((from, to)) = link_pair(ws, start, &cand) {
+                            connect(ws, from, to, start.ty == PinType::Exec);
+                        }
+                        app.canvas.link_drag = None;
+                        app.canvas.click_link = false;
+                    }
+                    _ => {
+                        app.canvas.link_drag = Some(d);
+                        app.canvas.click_link = true;
+                    }
+                }
+            }
             NodeEvent::PinDrag(d) => {
+                app.canvas.click_link = false;
                 let ws = &mut app.project.workspaces[ws_idx];
                 // Dragging from a connected data input picks up the existing wire.
                 if !d.is_output && d.ty != PinType::Exec {
@@ -1073,8 +1280,25 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         }
     }
 
+    // Finish a click-connection on empty space: offer matching blocks.
+    if app.canvas.click_link && app.canvas.link_drag.is_some() && bg_resp.clicked() {
+        let d = app.canvas.link_drag.take().unwrap();
+        app.canvas.click_link = false;
+        if let (Some(ps), Some(p)) = (pointer_scene, pointer) {
+            app.palette = Some(Palette {
+                scene_pos: ps,
+                screen_pos: p,
+                query: String::new(),
+                selected: 0,
+                connect: Some((d.node, d.pin.clone(), d.is_output, d.ty)),
+                just_opened: true,
+            });
+        }
+    }
+
     // Finish a link drag.
     if app.canvas.link_drag.is_some()
+        && !app.canvas.click_link
         && ctx.input(|i| i.pointer.primary_released() || !i.pointer.primary_down())
     {
         let d = app.canvas.link_drag.take().unwrap();
@@ -1113,6 +1337,19 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         app.selection.clear();
         app.selected_note = None;
         app.palette = None;
+        app.canvas.selected_link = hovered_link.clone();
+    }
+    if bg_resp.double_clicked() && hovered_link.is_none() {
+        if let Some(p) = bg_resp.interact_pointer_pos() {
+            app.palette = Some(Palette {
+                scene_pos: to_scene * p,
+                screen_pos: p,
+                query: String::new(),
+                selected: 0,
+                connect: None,
+                just_opened: true,
+            });
+        }
     }
     if bg_resp.secondary_clicked()
         && bg_resp
@@ -1146,8 +1383,8 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             rect.center(),
             egui::Align2::CENTER_CENTER,
             t(
-                "Rechtsklick, Leertaste oder „+ Block“ zum Hinzufügen von Blöcken",
-                "Right-click, space or “+ Block” to add blocks",
+                "Doppelklick, Rechtsklick, Leertaste oder „+ Block“ zum Hinzufügen von Blöcken",
+                "Double-click, right-click, space or “+ Block” to add blocks",
             ),
             FontId::proportional(15.0),
             theme::TEXT_WEAK,
@@ -1242,13 +1479,19 @@ fn keyboard(
         )
     });
     if del {
-        app.delete_selection();
+        if let Some(l) = app.canvas.selected_link.take() {
+            app.ws_mut().links.retain(|x| *x != l);
+        } else {
+            app.delete_selection();
+        }
     }
     if esc {
         app.selection.clear();
         app.selected_note = None;
         app.palette = None;
         app.canvas.link_drag = None;
+        app.canvas.click_link = false;
+        app.canvas.selected_link = None;
     }
     if dup {
         app.duplicate(ctx);

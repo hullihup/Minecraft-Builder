@@ -18,16 +18,30 @@ jobs:
         run: cargo test --release
       - name: Build
         run: cargo build --release
+      - name: Build installer
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" installer\setup.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Upload exe
         uses: actions/upload-artifact@v4
         with:
           name: minecraft-builder-windows-x64
           path: target/release/minecraft-builder.exe
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: minecraft-builder-setup
+          path: target/installer/*.exe
       - name: Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/minecraft-builder.exe
+          files: |
+            target/release/minecraft-builder.exe
+            target/installer/*.exe
 
   generated-code:
     # Checks that the generated Paper plugin and Fabric mod really compile.

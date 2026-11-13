@@ -59,7 +59,13 @@ fn send(tx: &Sender<Msg>, lvl: Level, s: impl Into<String>) {
 }
 
 /// Exports the project and, if `run_gradle`, builds the jar.
-pub fn start(project: Project, dir: PathBuf, run_gradle: bool, ctx: egui::Context) -> Job {
+pub fn start(
+    project: Project,
+    project_file: Option<PathBuf>,
+    dir: PathBuf,
+    run_gradle: bool,
+    ctx: egui::Context,
+) -> Job {
     let (tx, rx) = channel();
     let cancel = Arc::new(AtomicBool::new(false));
     let child: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
@@ -69,7 +75,15 @@ pub fn start(project: Project, dir: PathBuf, run_gradle: bool, ctx: egui::Contex
         child: child.clone(),
     };
     std::thread::spawn(move || {
-        let res = run(&project, &dir, run_gradle, &tx, &cancel, &child);
+        let res = run(
+            &project,
+            project_file.as_deref(),
+            &dir,
+            run_gradle,
+            &tx,
+            &cancel,
+            &child,
+        );
         let _ = tx.send(Msg::Finished(res));
         ctx.request_repaint();
     });
@@ -78,13 +92,14 @@ pub fn start(project: Project, dir: PathBuf, run_gradle: bool, ctx: egui::Contex
 
 fn run(
     project: &Project,
+    project_file: Option<&Path>,
     dir: &Path,
     run_gradle: bool,
     tx: &Sender<Msg>,
     cancel: &AtomicBool,
     child_slot: &Mutex<Option<Child>>,
 ) -> Result<PathBuf, String> {
-    let out = codegen::generate(project);
+    let mut out = codegen::generate(project);
     if out.has_errors() {
         for p in out.problems.iter().filter(|p| p.error) {
             send(tx, Level::Error, p.msg.clone());
@@ -100,6 +115,15 @@ fn run(
         Level::Info,
         format!("Exportiere nach {}", dir.display()),
     );
+    let pack = codegen::pack_files(project, project_file)?;
+    if !pack.is_empty() {
+        send(
+            tx,
+            Level::Info,
+            format!("Resourcepack: {} Dateien werden eingebaut", pack.len()),
+        );
+    }
+    out.files.extend(pack);
     codegen::write_to(&out, dir, &project.settings.package)
         .map_err(|e| format!("Export fehlgeschlagen: {e}"))?;
     if !run_gradle {
@@ -138,12 +162,7 @@ fn run(
     if let Some(home) = java.parent().and_then(|b| b.parent()) {
         cmd.env("JAVA_HOME", home);
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    crate::tools::hide_window(&mut cmd);
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("Gradle konnte nicht gestartet werden: {e}"))?;
@@ -243,44 +262,7 @@ fn find_jar(libs: &Path) -> Option<PathBuf> {
     jars.pop()
 }
 
-/// Finds a java executable: JAVA_HOME, then PATH, then common install folders.
-pub fn find_java() -> Option<PathBuf> {
-    let exe = if cfg!(windows) { "java.exe" } else { "java" };
-    if let Ok(home) = std::env::var("JAVA_HOME") {
-        let p = PathBuf::from(home).join("bin").join(exe);
-        if p.is_file() {
-            return Some(p);
-        }
-    }
-    if let Some(paths) = std::env::var_os("PATH") {
-        for d in std::env::split_paths(&paths) {
-            let p = d.join(exe);
-            if p.is_file() {
-                return Some(p);
-            }
-        }
-    }
-    if cfg!(windows) {
-        for root in [
-            "C:\\Program Files\\Eclipse Adoptium",
-            "C:\\Program Files\\Java",
-            "C:\\Program Files\\Microsoft",
-        ] {
-            if let Ok(rd) = std::fs::read_dir(root) {
-                let mut found: Vec<PathBuf> = rd
-                    .filter_map(|e| e.ok())
-                    .map(|e| e.path().join("bin").join(exe))
-                    .filter(|p| p.is_file())
-                    .collect();
-                found.sort();
-                if let Some(p) = found.pop() {
-                    return Some(p);
-                }
-            }
-        }
-    }
-    None
-}
+pub use crate::tools::find_java;
 
 // ---------------------------------------------------------------------------
 // Version lookup
@@ -412,6 +394,12 @@ pub struct AppSettings {
     pub snap: bool,
     #[serde(default)]
     pub ui_scale: f32,
+    /// First-start wizard finished.
+    #[serde(default)]
+    pub onboarded: bool,
+    /// Left drag on empty canvas draws a selection box instead of panning.
+    #[serde(default)]
+    pub left_drag_selects: bool,
 }
 
 impl Default for AppSettings {
@@ -421,6 +409,8 @@ impl Default for AppSettings {
             recent: vec![],
             snap: true,
             ui_scale: 1.0,
+            onboarded: false,
+            left_drag_selects: false,
         }
     }
 }
@@ -435,6 +425,19 @@ fn config_dir() -> PathBuf {
     };
     base.unwrap_or_else(|| PathBuf::from("."))
         .join("MinecraftBuilder")
+}
+
+/// Default folder for new projects: Documents/Minecraft Builder.
+pub fn default_projects_dir() -> PathBuf {
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let docs = ["Documents", "Dokumente"]
+        .iter()
+        .map(|d| home.join(d))
+        .find(|p| p.is_dir())
+        .unwrap_or(home);
+    docs.join("Minecraft Builder")
 }
 
 impl AppSettings {

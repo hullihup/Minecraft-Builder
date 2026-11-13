@@ -78,6 +78,52 @@ pub struct ProjectSettings {
     /// Optional folder of a test server (plugins/ or mods/) the jar gets copied into.
     #[serde(default)]
     pub deploy_dir: String,
+    /// Optional resource pack (textures/models) bundled into the plugin/mod.
+    #[serde(default)]
+    pub pack: PackSettings,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PackSettings {
+    /// Path of the resource pack .zip, relative to the project file if possible.
+    pub path: String,
+    /// Paper: port of the small web server that hands the pack to players.
+    pub port: u16,
+    /// Paper: players must accept the pack or get kicked.
+    pub required: bool,
+    /// Paper: send the pack automatically when a player joins.
+    pub send_on_join: bool,
+    /// Paper: text shown in the download prompt.
+    pub prompt: String,
+}
+
+impl Default for PackSettings {
+    fn default() -> Self {
+        Self {
+            path: String::new(),
+            port: 8164,
+            required: false,
+            send_on_join: true,
+            prompt: "&aDieser Server nutzt eigene Texturen.".into(),
+        }
+    }
+}
+
+impl PackSettings {
+    pub fn enabled(&self) -> bool {
+        !self.path.trim().is_empty()
+    }
+    /// Absolute path, resolving relative paths against the project file's folder.
+    pub fn resolve(&self, project_file: Option<&std::path::Path>) -> std::path::PathBuf {
+        let p = std::path::PathBuf::from(self.path.trim());
+        if p.is_absolute() {
+            return p;
+        }
+        match project_file.and_then(|f| f.parent()) {
+            Some(dir) => dir.join(p),
+            None => p,
+        }
+    }
 }
 
 impl Default for ProjectSettings {
@@ -92,6 +138,7 @@ impl Default for ProjectSettings {
             platform: Platform::Paper,
             versions: Versions::default_for(Platform::Paper),
             deploy_dir: String::new(),
+            pack: PackSettings::default(),
         }
     }
 }

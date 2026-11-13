@@ -99,3 +99,16 @@ pub fn app_icon() -> egui::IconData {
         height: 64,
     }
 }
+
+/// The logo as a texture (cached).
+pub fn logo(ctx: &egui::Context) -> egui::TextureHandle {
+    let id = egui::Id::unique("mcb_logo_texture");
+    if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return t;
+    }
+    let img =
+        egui::ColorImage::from_rgba_unmultiplied([64, 64], include_bytes!("../assets/icon64.rgba"));
+    let t = ctx.load_texture("mcb_logo", img, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(id, t.clone()));
+    t
+}

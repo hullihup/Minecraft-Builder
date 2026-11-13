@@ -1,0 +1,21 @@
+NUTZUNGSBEDINGUNGEN – MINECRAFT BUILDER
+
+Bitte lies diese Bedingungen, bevor du Minecraft Builder installierst. Mit der Installation erklärst du dich damit einverstanden.
+
+1. Nutzung
+Du darfst Minecraft Builder kostenlos installieren und benutzen, auch um Plugins und Mods zu erstellen, die du veröffentlichst oder verkaufst. Die Plugins und Mods, die du mit Minecraft Builder erstellst, gehören dir.
+
+2. Keine Gewährleistung
+Die Software wird ohne Mängelgewähr ("wie sie ist") bereitgestellt. Es gibt keine Garantie, dass sie fehlerfrei funktioniert oder für einen bestimmten Zweck geeignet ist. Mache Sicherungskopien deiner Server und Welten, bevor du erzeugte Plugins oder Mods testest. Soweit gesetzlich zulässig, wird keine Haftung für Schäden übernommen, die durch die Nutzung entstehen.
+
+3. Deine Verantwortung
+Du bist selbst dafür verantwortlich, was deine Plugins und Mods tun und welche Inhalte (z. B. Texturen in Resourcepacks) du verwendest. Beachte die Nutzungsbedingungen und Richtlinien von Minecraft (Mojang/Microsoft) sowie die Rechte Dritter.
+
+4. Keine Verbindung zu Mojang oder Microsoft
+Minecraft Builder ist kein offizielles Minecraft-Produkt und weder von Mojang noch von Microsoft genehmigt oder mit ihnen verbunden. "Minecraft" ist eine Marke von Mojang Synergies AB.
+
+5. Software von Drittanbietern
+Auf Wunsch lädt Minecraft Builder zusätzliche Werkzeuge aus dem Internet herunter, z. B. Java (Eclipse Temurin, GPLv2 mit Classpath Exception), Gradle (Apache-Lizenz 2.0), Paper-API, Fabric und Minecraft-Bibliotheken. Für diese gelten deren eigene Lizenzen und Bedingungen.
+
+6. Daten und Internet
+Deine Projekte bleiben auf deinem Computer. Minecraft Builder verbindet sich nur mit dem Internet, um Werkzeuge, Bibliotheken und aktuelle Versionsnummern herunterzuladen. Es werden keine persönlichen Daten an den Entwickler gesendet.

@@ -1,6 +1,6 @@
 [package]
 name = "minecraft-builder"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Visual block editor for Minecraft plugins (Paper) and mods (Fabric)"
 license = "MIT"
@@ -20,11 +20,15 @@ glow = ["eframe/glow"]
 chrono = "0.4.45"
 eframe = { version = "0.37", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "links", "system_fonts", "x11", "wayland"] }
 egui = "0.37"
+flate2 = "1.1.11"
+image = { version = "0.25", default-features = false, features = ["png"] }
 open = "5"
 rfd = "0.18"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+tar = "0.4.46"
 ureq = { version = "3", features = ["platform-verifier"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [profile.release]
 opt-level = 3

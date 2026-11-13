@@ -138,10 +138,11 @@ pub enum Cat {
     Math,
     Text,
     Data,
+    Resources,
     Server,
 }
 
-pub const CATEGORIES: [Cat; 10] = [
+pub const CATEGORIES: [Cat; 11] = [
     Cat::Events,
     Cat::Messages,
     Cat::Player,
@@ -151,6 +152,7 @@ pub const CATEGORIES: [Cat; 10] = [
     Cat::Math,
     Cat::Text,
     Cat::Data,
+    Cat::Resources,
     Cat::Server,
 ];
 
@@ -166,6 +168,7 @@ impl Cat {
             Cat::Math => ("Mathe", "Math"),
             Cat::Text => ("Text", "Text"),
             Cat::Data => ("Gespeicherte Daten", "Stored data"),
+            Cat::Resources => ("Texturen & Modelle", "Textures & models"),
             Cat::Server => ("Server", "Server"),
         }
     }
@@ -180,6 +183,7 @@ impl Cat {
             Cat::Math => Color32::from_rgb(0x45, 0xC8, 0xFF),
             Cat::Text => Color32::from_rgb(0xF2, 0xC1, 0x4E),
             Cat::Data => Color32::from_rgb(0xFF, 0x7A, 0xC6),
+            Cat::Resources => Color32::from_rgb(0xC0, 0x8B, 0xFF),
             Cat::Server => Color32::from_rgb(0x9A, 0xA4, 0xB2),
         }
     }
@@ -194,6 +198,7 @@ impl Cat {
             Cat::Math => "∑",
             Cat::Text => "✏",
             Cat::Data => "💾",
+            Cat::Resources => "🎨",
             Cat::Server => "🖧",
         }
     }
@@ -215,6 +220,8 @@ pub enum FieldKind {
     Number,
     Bool,
     Choice(&'static [(&'static str, L)]),
+    /// Item model id, with a picker listing the models of the project's resource pack.
+    ItemModel,
 }
 
 #[derive(Clone, Debug)]
@@ -223,6 +230,8 @@ pub struct FieldDef {
     pub label: L,
     pub kind: FieldKind,
     pub default: &'static str,
+    /// Only shown in the inspector / commands window, not on the block itself.
+    pub advanced: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -372,6 +381,18 @@ impl B {
             label,
             kind,
             default,
+            advanced: false,
+        });
+        self
+    }
+    /// Field that is only shown in the inspector.
+    fn fa(mut self, id: &'static str, label: L, kind: FieldKind, default: &'static str) -> Self {
+        self.0.fields.push(FieldDef {
+            id,
+            label,
+            kind,
+            default,
+            advanced: true,
         });
         self
     }
@@ -637,9 +658,15 @@ fn build_all() -> Vec<BlockDef> {
             .f("description", ("Beschreibung", "Description"), F::Text, "Ein eigener Befehl")
             .f("op", ("Nur für OPs", "OPs only"), F::Bool, "false")
             .f("players_only", ("Nur Spieler", "Players only"), F::Bool, "true")
+            .fa("aliases", ("Aliase", "Aliases"), F::Text, "")
+            .fa("permission", ("Berechtigung", "Permission"), F::Text, "")
+            .fa("min_args", ("Min. Argumente", "Min. arguments"), F::Number, "0")
+            .fa("usage", ("Hilfetext", "Usage text"), F::Text, "&cBenutzung: /<befehl> <argument>")
+            .fa("suggest", ("Vorschläge (Tab)", "Suggestions (tab)"), F::Text, "")
             .o("player", p_player, T::Player)
             .o("arg1", ("Argument 1", "Argument 1"), T::Text)
             .o("arg2", ("Argument 2", "Argument 2"), T::Text)
+            .o("arg3", ("Argument 3", "Argument 3"), T::Text)
             .o("args", ("Alle Argumente", "All arguments"), T::Text)
             .o("argc", ("Anzahl Argumente", "Argument count"), T::Number)
             .paper_empty()
@@ -1682,6 +1709,73 @@ fn build_all() -> Vec<BlockDef> {
         .o("count", ("Anzahl", "Count"), T::Number)
         .pout("count", "org.bukkit.Bukkit.getOnlinePlayers().size()")
         .fout("count", "${server}.getPlayerCount()"),
+    );
+
+    // -------------------------------------------------------------- Resources
+    v.push(
+        b("custom_item", C::Resources, K::Action,
+            ("Eigenes Item geben", "Give custom item"),
+            ("Gibt ein Item mit eigenem Modell aus deinem Resourcepack, eigenem Namen und Beschreibung. Mehrere Beschreibungszeilen mit | trennen.",
+             "Gives an item with a custom model from your resource pack, custom name and lore. Separate lore lines with |."))
+            .f("model", ("Modell", "Model"), F::ItemModel, "")
+            .i("player", p_player, T::Player, "")
+            .i("item", ("Basis-Item", "Base item"), T::Text, "minecraft:stick")
+            .i("name", ("Name", "Name"), T::Text, "&6Zauberstab")
+            .i("lore", ("Beschreibung", "Lore"), T::Text, "&7Ein magischer Stab")
+            .i("amount", ("Anzahl", "Amount"), T::Number, "1")
+            .both("Util.giveCustom(${in:player}, ${in:item}, ${in:amount}, ${s:model}, ${in:name}, ${in:lore});"),
+    );
+    v.push(
+        b("held_model", C::Resources, K::Value,
+            ("Modell in der Hand", "Model in hand"),
+            ("Die Modell-ID des Items in der Haupthand, z. B. meinpack:zauberstab. Gut mit „Rechtsklick mit Item“ und „Text gleich“.",
+             "The model id of the item in the main hand, e.g. mypack:wand. Works well with “Right click with item” and “Text equals”."))
+            .i("player", p_player, T::Player, "")
+            .o("model", ("Modell", "Model"), T::Text)
+            .bout("model", "Util.heldModel(${in:player})"),
+    );
+    v.push(
+        b(
+            "is_model",
+            C::Resources,
+            K::Value,
+            ("Hält Modell?", "Holds model?"),
+            (
+                "Ja, wenn der Spieler ein Item mit diesem Modell in der Hand hält.",
+                "Yes if the player holds an item with this model.",
+            ),
+        )
+        .f("model", ("Modell", "Model"), F::ItemModel, "")
+        .i("player", p_player, T::Player, "")
+        .o("res", ("Ergebnis", "Result"), T::Bool)
+        .bout(
+            "res",
+            "Util.heldModel(${in:player}).equalsIgnoreCase(${s:model})",
+        ),
+    );
+    v.push(
+        b("send_pack", C::Resources, K::Action,
+            ("Resourcepack senden", "Send resource pack"),
+            ("Schickt dem Spieler das Resourcepack des Plugins (passiert sonst automatisch beim Betreten). Nur Paper.",
+             "Sends the plugin's resource pack to the player (otherwise happens automatically on join). Paper only."))
+            .i("player", p_player, T::Player, "")
+            .paper("ResourcePack.send(${in:player});"),
+    );
+    v.push(
+        b(
+            "particles",
+            C::World,
+            K::Action,
+            ("Partikel", "Particles"),
+            (
+                "Erzeugt Partikel an einer Position, z. B. heart, flame, happy_villager, cloud.",
+                "Spawns particles at a location, e.g. heart, flame, happy_villager, cloud.",
+            ),
+        )
+        .i("loc", ("Position", "Location"), T::Location, "")
+        .i("type", ("Typ", "Type"), T::Text, "heart")
+        .i("count", ("Anzahl", "Count"), T::Number, "10")
+        .both("Util.particles(${in:loc}, ${in:type}, ${in:count});"),
     );
 
     v.into_iter().map(|b| b.0).collect()

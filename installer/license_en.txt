@@ -1,0 +1,21 @@
+TERMS OF USE – MINECRAFT BUILDER
+
+Please read these terms before installing Minecraft Builder. By installing it you agree to them.
+
+1. Use
+You may install and use Minecraft Builder for free, including to create plugins and mods that you publish or sell. The plugins and mods you create with Minecraft Builder belong to you.
+
+2. No warranty
+The software is provided "as is", without warranty of any kind. There is no guarantee that it works without errors or fits a particular purpose. Back up your servers and worlds before testing generated plugins or mods. To the extent permitted by law, no liability is accepted for damage caused by using it.
+
+3. Your responsibility
+You are responsible for what your plugins and mods do and for the content you use (for example textures in resource packs). Follow the terms and guidelines of Minecraft (Mojang/Microsoft) and respect the rights of others.
+
+4. Not affiliated with Mojang or Microsoft
+Minecraft Builder is not an official Minecraft product and is not approved by or associated with Mojang or Microsoft. "Minecraft" is a trademark of Mojang Synergies AB.
+
+5. Third-party software
+On request Minecraft Builder downloads additional tools from the internet, for example Java (Eclipse Temurin, GPLv2 with Classpath Exception), Gradle (Apache License 2.0), the Paper API, Fabric and Minecraft libraries. Their own licenses and terms apply.
+
+6. Data and internet
+Your projects stay on your computer. Minecraft Builder only connects to the internet to download tools, libraries and current version numbers. No personal data is sent to the developer.

@@ -83,8 +83,9 @@ pub fn top_bar(app: &mut App, ui: &mut Ui) {
                         .fill(theme::GREEN)
                         .corner_radius(6)
                         .min_size(vec2(84.0, 28.0));
-                        if ui
-                            .add(b)
+                        let br = ui.add(b);
+                        app.ui_rects.insert("build", br.rect);
+                        if br
                             .on_hover_text(t(
                                 "Erzeugt die fertige .jar-Datei (F5)",
                                 "Creates the finished .jar file (F5)",
@@ -101,6 +102,7 @@ pub fn top_bar(app: &mut App, ui: &mut Ui) {
             // Centered search box that opens the block palette.
             let w = 380.0_f32.min(full.width() * 0.32);
             let sr = egui::Rect::from_center_size(full.center(), vec2(w, 26.0));
+            app.ui_rects.insert("search", sr);
             let resp = ui.interact(sr, ui.scope_id().with("top_search"), Sense::click());
             let hovered = resp.hovered();
             ui.painter().rect(
@@ -155,6 +157,10 @@ pub fn top_bar(app: &mut App, ui: &mut Ui) {
 fn menus(app: &mut App, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     ui.menu_button(t("Datei", "File"), |ui| {
+        if ui.button(t("🏠 Startseite", "🏠 Start screen")).clicked() {
+            app.go_home();
+        }
+        ui.separator();
         if ui
             .button(t("Neues Projekt…   Strg+N", "New project…   Ctrl+N"))
             .clicked()
@@ -341,6 +347,21 @@ fn menus(app: &mut App, ui: &mut Ui) {
         }
     });
     ui.menu_button(t("Hilfe", "Help"), |ui| {
+        if ui
+            .button(t("🎓 Tutorial starten", "🎓 Start tutorial"))
+            .clicked()
+        {
+            crate::ui::onboarding::start_tutorial(app);
+        }
+        if ui
+            .button(t(
+                "Einrichtung (Sprache, Java & Gradle)…",
+                "Setup (language, Java & Gradle)…",
+            ))
+            .clicked()
+        {
+            app.onboarding = Some(0);
+        }
         if ui.button(t("Kurzanleitung", "Quick guide")).clicked() {
             app.dialog = Dialog::Message {
                 title: t("Kurzanleitung", "Quick guide").into(),
@@ -469,7 +490,7 @@ pub fn status_bar(app: &mut App, ui: &mut Ui) {
 // ----------------------------------------------------------- activity bar
 
 pub fn activity_bar(app: &mut App, ui: &mut Ui) {
-    egui::Panel::left("activity_bar")
+    let resp = egui::Panel::left("activity_bar")
         .exact_size(46.0)
         .resizable(false)
         .frame(
@@ -494,6 +515,11 @@ pub fn activity_bar(app: &mut App, ui: &mut Ui) {
                     Activity::Project,
                     "⚙",
                     t("Projekt & Versionen", "Project & versions"),
+                ),
+                (
+                    Activity::Resources,
+                    "🎨",
+                    t("Texturen & Modelle", "Textures & models"),
                 ),
                 (Activity::Build, "📦", t("Bauen & Export", "Build & export")),
             ];
@@ -529,6 +555,7 @@ pub fn activity_bar(app: &mut App, ui: &mut Ui) {
                 }
             }
         });
+    app.ui_rects.insert("activity", resp.response.rect);
 }
 
 // --------------------------------------------------------------- sidebar
@@ -546,6 +573,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                     Activity::Blocks => sidebar_blocks(app, ui),
                     Activity::Project => sidebar_project(app, ui),
                     Activity::Build => sidebar_build(app, ui),
+                    Activity::Resources => crate::ui::resources::sidebar(app, ui),
                 });
         });
 }
@@ -709,6 +737,17 @@ fn sidebar_workspaces(app: &mut App, ui: &mut Ui) {
         let scene = ((c - app.canvas.rect.min) - view.pan) / view.zoom;
         let id = app.add_node("ev_command", scene.to_pos2());
         app.focus_node = Some((app.active_ws, id));
+    }
+    if list_item(
+        ui,
+        false,
+        "✏",
+        t("Befehle bearbeiten…", "Edit commands…"),
+        theme::TEXT_WEAK,
+    )
+    .clicked()
+    {
+        app.show_commands = true;
     }
     ui.add_space(14.0);
     ui.horizontal(|ui| {
@@ -976,29 +1015,7 @@ fn sidebar_build(app: &mut App, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     section_header(ui, t("Bauen & Export", "Build & export"));
     ui.add_space(8.0);
-    let java = crate::build::find_java();
-    match &java {
-        Some(p) => {
-            ui.label(
-                RichText::new(format!("✔ Java: {}", p.display()))
-                    .size(11.5)
-                    .color(theme::GREEN),
-            );
-        }
-        None => {
-            ui.label(
-                RichText::new(t("✖ Java nicht gefunden", "✖ Java not found")).color(theme::RED),
-            );
-            ui.label(
-                RichText::new(t(
-                    "Zum Bauen wird Java 21+ benötigt:",
-                    "Building needs Java 21+:",
-                ))
-                .size(11.5),
-            );
-            ui.hyperlink_to("adoptium.net", "https://adoptium.net/");
-        }
-    }
+    crate::ui::home::tool_status(app, ui, &ctx);
     ui.add_space(10.0);
     let busy = app.job.is_some();
     let bw = ui.available_width();
@@ -1097,7 +1114,7 @@ fn sidebar_build(app: &mut App, ui: &mut Ui) {
 // ------------------------------------------------------------ right panel
 
 pub fn right_panel(app: &mut App, ui: &mut Ui) {
-    egui::Panel::right("right_panel")
+    let resp = egui::Panel::right("right_panel")
         .default_size(320.0)
         .size_range(240.0..=640.0)
         .frame(panel_frame(theme::BG_SIDEBAR))
@@ -1113,10 +1130,15 @@ pub fn right_panel(app: &mut App, ui: &mut Ui) {
             egui::Frame::new()
                 .inner_margin(Margin::same(12))
                 .show(ui, |ui| match app.right_tab {
-                    RightTab::Inspector => inspector(app, ui),
+                    RightTab::Inspector => {
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| inspector(app, ui));
+                    }
                     RightTab::Code => code_view(app, ui),
                 });
         });
+    app.ui_rects.insert("right", resp.response.rect);
 }
 
 fn tab_strip<T: PartialEq + Copy>(ui: &mut Ui, current: &mut T, tabs: &[(T, &str)]) {
@@ -1377,11 +1399,25 @@ fn inspector(app: &mut App, ui: &mut Ui) {
             ui.add_space(8.0);
         }
         ui.add_space(8.0);
-        if ui
-            .button(RichText::new(t("Block löschen", "Delete block")).color(theme::RED))
-            .clicked()
-        {
-            delete = true;
+        let mut open_cmds = false;
+        ui.horizontal(|ui| {
+            if def.special == Special::Command
+                && ui
+                    .button(t("Im Befehle-Fenster öffnen", "Open in commands window"))
+                    .clicked()
+            {
+                open_cmds = true;
+            }
+            if ui
+                .button(RichText::new(t("Block löschen", "Delete block")).color(theme::RED))
+                .clicked()
+            {
+                delete = true;
+            }
+        });
+        if open_cmds {
+            app.selected_command = Some((ws_idx, id));
+            app.show_commands = true;
         }
     }
     if delete {
@@ -1530,7 +1566,7 @@ fn java_highlight(code: &str) -> egui::text::LayoutJob {
 // ----------------------------------------------------------- bottom panel
 
 pub fn bottom_panel(app: &mut App, ui: &mut Ui) {
-    egui::Panel::bottom("bottom_panel")
+    let resp = egui::Panel::bottom("bottom_panel")
         .resizable(true)
         .default_size(200.0)
         .size_range(90.0..=600.0)
@@ -1555,6 +1591,7 @@ pub fn bottom_panel(app: &mut App, ui: &mut Ui) {
                     BottomTab::Problems => problems(app, ui),
                 });
         });
+    app.ui_rects.insert("bottom", resp.response.rect);
 }
 
 fn console(app: &mut App, ui: &mut Ui) {

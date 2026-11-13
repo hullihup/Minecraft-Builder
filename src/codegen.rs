@@ -38,11 +38,12 @@ const DAEMON_JVM_21: &str = include_str!("../assets/wrapper/daemon-jvm-21.proper
 const STORAGE_JAVA: &str = include_str!("../assets/templates/common/Storage.java");
 const UTIL_COMMON: &str = include_str!("../assets/templates/common/UtilCommon.java.part");
 const PAPER_UTIL: &str = include_str!("../assets/templates/paper/Util.java");
+const PAPER_PACK: &str = include_str!("../assets/templates/paper/ResourcePack.java");
 const FABRIC_UTIL: &str = include_str!("../assets/templates/fabric/Util.java");
 const FABRIC_LOC: &str = include_str!("../assets/templates/fabric/Loc.java");
 const FABRIC_SCHEDULER: &str = include_str!("../assets/templates/fabric/Scheduler.java");
 
-const GRADLE_VERSION: &str = "9.8.2";
+pub const GRADLE_VERSION: &str = "9.8.2";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -374,7 +375,7 @@ impl<'a> Gen<'a> {
                     f.default.to_string()
                 }
             }
-            FieldKind::Text | FieldKind::Multiline => v.to_string(),
+            FieldKind::Text | FieldKind::Multiline | FieldKind::ItemModel => v.to_string(),
         }
     }
 
@@ -504,8 +505,26 @@ struct Parts {
     init: Vec<String>,
     /// Extra methods / fields of the main class.
     members: Vec<String>,
-    /// Paper: plugin.yml command entries (name, description, op).
-    commands: Vec<(String, String, bool)>,
+    /// Paper: plugin.yml command entries.
+    commands: Vec<CmdInfo>,
+}
+
+struct CmdInfo {
+    name: String,
+    desc: String,
+    aliases: Vec<String>,
+    /// Permission node, if any (custom or generated for "OPs only").
+    permission: Option<String>,
+    /// Generated permission that defaults to OP.
+    op_default: bool,
+}
+
+/// Comma/space separated list -> cleaned items.
+fn split_list(s: &str) -> Vec<String> {
+    s.split([',', ';', ' '])
+        .map(|x| x.trim().trim_start_matches('/').to_string())
+        .filter(|x| !x.is_empty())
+        .collect()
 }
 
 fn new_scope(ret: &str) -> Scope {
@@ -628,6 +647,38 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                 let desc = value_of(ev, "description", "").to_string();
                 let op = value_of(ev, "op", "false") == "true";
                 let players_only = value_of(ev, "players_only", "true") == "true";
+                let aliases: Vec<String> = split_list(value_of(ev, "aliases", ""))
+                    .into_iter()
+                    .map(|a| clean_command(&a))
+                    .filter(|a| !a.is_empty() && *a != name)
+                    .collect();
+                for a in &aliases {
+                    if let Some(other) = seen_cmds.get(a) {
+                        if *other != ev.id {
+                            g.err(ev.id, format!("Der Alias /{a} ist schon vergeben"));
+                        }
+                    }
+                    seen_cmds.insert(a.clone(), ev.id);
+                }
+                let custom_perm = value_of(ev, "permission", "").trim().to_string();
+                let min_args = value_of(ev, "min_args", "0")
+                    .trim()
+                    .replace(',', ".")
+                    .parse::<f64>()
+                    .unwrap_or(0.0)
+                    .max(0.0) as usize;
+                let usage = value_of(ev, "usage", "&cBenutzung: /<befehl> <argument>")
+                    .replace("<befehl>", &name)
+                    .replace("<command>", &name);
+                let suggestions = split_list(value_of(ev, "suggest", ""));
+                let suggest_array = format!(
+                    "new String[] {{ {} }}",
+                    suggestions
+                        .iter()
+                        .map(|x| java_str(x))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
                 let ret = match g.p {
                     Platform::Paper => "return true;",
                     Platform::Fabric => "return 1;",
@@ -643,6 +694,7 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                     ("player", player_expr),
                     ("arg1", "Util.arg(args, 0)".to_string()),
                     ("arg2", "Util.arg(args, 1)".to_string()),
+                    ("arg3", "Util.arg(args, 2)".to_string()),
                     ("args", "String.join(\" \", args)".to_string()),
                     ("argc", "args.length".to_string()),
                 ];
@@ -661,13 +713,38 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                     // The player may be null: do not use it automatically.
                     sc.player = None;
                 }
+                if min_args > 0 {
+                    match g.p {
+                        Platform::Paper => pre.push(format!(
+                            "if (args.length < {min_args}) {{ sender.sendMessage(Util.color({})); return true; }}",
+                            java_str(&usage)
+                        )),
+                        Platform::Fabric => pre.push(format!(
+                            "if (args.length < {min_args}) {{ source.sendFailure(Util.color({})); return 0; }}",
+                            java_str(&usage)
+                        )),
+                    }
+                }
                 let body = g.chain(ev.id, "next", &sc, &mut vec![]);
                 let mut all = pre;
                 all.extend(body);
                 parts.init.push(title);
                 match g.p {
                     Platform::Paper => {
-                        parts.commands.push((name.clone(), desc, op));
+                        let permission = if !custom_perm.is_empty() {
+                            Some(custom_perm.clone())
+                        } else if op {
+                            Some(String::new())
+                        } else {
+                            None
+                        };
+                        parts.commands.push(CmdInfo {
+                            name: name.clone(),
+                            desc,
+                            aliases: aliases.clone(),
+                            op_default: op && custom_perm.is_empty(),
+                            permission,
+                        });
                         parts.init.push(format!(
                             "java.util.Objects.requireNonNull(getCommand({})).setExecutor((sender, command, label, args) -> {{",
                             java_str(&name)
@@ -675,6 +752,12 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                         parts.init.extend(indent(&all, 4));
                         parts.init.push("    return true;".into());
                         parts.init.push("});".into());
+                        if !suggestions.is_empty() {
+                            parts.init.push(format!(
+                                "java.util.Objects.requireNonNull(getCommand({})).setTabCompleter((sender, command, alias, args) -> args.length == 1 ? Util.tab({suggest_array}, args[0]) : java.util.List.of());",
+                                java_str(&name)
+                            ));
+                        }
                     }
                     Platform::Fabric => {
                         for i in [
@@ -686,21 +769,35 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                             g.imports.insert(i.into());
                         }
                         let m = format!("cmd{}", ev.id);
-                        parts.init.push("CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {".into());
-                        parts.init.push(format!(
-                            "    dispatcher.register(Commands.literal({})",
-                            java_str(&name)
-                        ));
-                        if op {
-                            parts.init.push("        .requires(Util::isOp)".into());
+                        if !suggestions.is_empty() {
+                            g.imports
+                                .insert("net.minecraft.commands.SharedSuggestionProvider".into());
                         }
-                        parts.init.push(format!(
-                            "        .executes(ctx -> {m}(ctx.getSource(), new String[0]))"
-                        ));
-                        parts.init.push("        .then(Commands.argument(\"args\", StringArgumentType.greedyString())".into());
-                        parts.init.push(format!(
-                            "            .executes(ctx -> {m}(ctx.getSource(), StringArgumentType.getString(ctx, \"args\").trim().split(\"\\\\s+\")))));"
-                        ));
+                        if !custom_perm.is_empty() {
+                            g.warn(ev.id, "Eigene Berechtigungen gibt es bei Fabric nicht – der Befehl ist dort nur für OPs".into());
+                        }
+                        parts.init.push("CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {".into());
+                        for label in std::iter::once(&name).chain(aliases.iter()) {
+                            parts.init.push(format!(
+                                "    dispatcher.register(Commands.literal({})",
+                                java_str(label)
+                            ));
+                            if op || !custom_perm.is_empty() {
+                                parts.init.push("        .requires(Util::isOp)".into());
+                            }
+                            parts.init.push(format!(
+                                "        .executes(ctx -> {m}(ctx.getSource(), new String[0]))"
+                            ));
+                            parts.init.push("        .then(Commands.argument(\"args\", StringArgumentType.greedyString())".into());
+                            if !suggestions.is_empty() {
+                                parts.init.push(format!(
+                                    "            .suggests((ctx, builder) -> SharedSuggestionProvider.suggest({suggest_array}, builder))"
+                                ));
+                            }
+                            parts.init.push(format!(
+                                "            .executes(ctx -> {m}(ctx.getSource(), StringArgumentType.getString(ctx, \"args\").trim().split(\"\\\\s+\")))));"
+                            ));
+                        }
                         parts.init.push("});".into());
                         let mut mlines = vec![
                             format!("// /{name} (#{})", ev.id),
@@ -809,6 +906,18 @@ pub fn generate(proj: &Project) -> Output {
     let p = s.platform;
     let main = s.main_class();
     let mut problems = vec![];
+    for (wi, ws) in proj.workspaces.iter().enumerate() {
+        for n in &ws.nodes {
+            if n.kind == "send_pack" && !s.pack.enabled() {
+                problems.push(Problem {
+                    ws: wi,
+                    node: Some(n.id),
+                    msg: "Es ist kein Resourcepack hinzugefügt (Seitenleiste „Ressourcen“)".into(),
+                    error: true,
+                });
+            }
+        }
+    }
     let mut imports = BTreeSet::new();
     let mut parts = Parts {
         init: vec![],
@@ -857,7 +966,7 @@ pub fn generate(proj: &Project) -> Output {
     };
 
     let main_java = match p {
-        Platform::Paper => paper_main(&pkg, &main, &parts),
+        Platform::Paper => paper_main(&pkg, &main, &parts, s.pack.enabled()),
         Platform::Fabric => fabric_main(&pkg, &main, &s.id, &parts, &imports),
     };
 
@@ -948,17 +1057,40 @@ tasks.jar {{
             );
             if !parts.commands.is_empty() {
                 yml.push_str("commands:\n");
-                for (name, desc, op) in &parts.commands {
-                    yml.push_str(&format!("  {name}:\n    description: {}\n", yaml_str(desc)));
-                    if *op {
-                        yml.push_str(&format!("    permission: {}.command.{name}\n", s.id));
+                for c in &parts.commands {
+                    yml.push_str(&format!(
+                        "  {}:\n    description: {}\n",
+                        c.name,
+                        yaml_str(&c.desc)
+                    ));
+                    if !c.aliases.is_empty() {
+                        yml.push_str(&format!(
+                            "    aliases: [{}]\n",
+                            c.aliases
+                                .iter()
+                                .map(|a| yaml_str(a))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ));
+                    }
+                    match &c.permission {
+                        Some(p) if !p.is_empty() => {
+                            yml.push_str(&format!("    permission: {}\n", yaml_str(p)))
+                        }
+                        Some(_) => {
+                            yml.push_str(&format!("    permission: {}.command.{}\n", s.id, c.name))
+                        }
+                        None => {}
                     }
                 }
-                let ops: Vec<_> = parts.commands.iter().filter(|c| c.2).collect();
+                let ops: Vec<_> = parts.commands.iter().filter(|c| c.op_default).collect();
                 if !ops.is_empty() {
                     yml.push_str("permissions:\n");
-                    for (name, _, _) in ops {
-                        yml.push_str(&format!("  {}.command.{name}:\n    default: op\n", s.id));
+                    for c in ops {
+                        yml.push_str(&format!(
+                            "  {}.command.{}:\n    default: op\n",
+                            s.id, c.name
+                        ));
                     }
                 }
             }
@@ -975,6 +1107,27 @@ tasks.jar {{
                 format!("src/main/java/{pkg_path}/Storage.java"),
                 fill(STORAGE_JAVA),
             );
+            if s.pack.enabled() {
+                add(
+                    format!("src/main/java/{pkg_path}/ResourcePack.java"),
+                    fill(PAPER_PACK)
+                        .replace("__PORT__", &s.pack.port.to_string())
+                        .replace(
+                            "__REQUIRED__",
+                            if s.pack.required { "true" } else { "false" },
+                        ),
+                );
+                add(
+                    "src/main/resources/config.yml".into(),
+                    format!(
+                        "# Generated by Minecraft Builder\nresource-pack:\n  # Port of the built-in web server that hands out the resource pack (must be reachable for players)\n  port: {}\n  # Public address or domain of your server. Empty = the address the player connected with\n  public-address: \"\"\n  # Players must accept the pack\n  required: {}\n  # Send the pack automatically when a player joins\n  send-on-join: {}\n  # Text in the download prompt (&-color codes)\n  prompt: {}\n",
+                        s.pack.port,
+                        s.pack.required,
+                        s.pack.send_on_join,
+                        yaml_str(&s.pack.prompt)
+                    ),
+                );
+            }
         }
         Platform::Fabric => {
             add(
@@ -1133,15 +1286,21 @@ fn api_version(mc: &str) -> String {
     mc.trim().to_string()
 }
 
-fn paper_main(pkg: &str, main: &str, parts: &Parts) -> String {
+fn paper_main(pkg: &str, main: &str, parts: &Parts, pack: bool) -> String {
     let mut o = format!(
         "package {pkg};\n\n// Generated by Minecraft Builder. Changes here are overwritten on the next build.\n\npublic final class {main} extends org.bukkit.plugin.java.JavaPlugin implements org.bukkit.event.Listener {{\n    public static {main} INSTANCE;\n\n    @Override\n    public void onEnable() {{\n        INSTANCE = this;\n        Storage.init(getDataFolder().toPath());\n        getServer().getPluginManager().registerEvents(this, this);\n"
     );
+    if pack {
+        o.push_str("        saveDefaultConfig();\n        ResourcePack.init(this);\n");
+    }
     for l in indent(&parts.init, 8) {
         o.push_str(&l);
         o.push('\n');
     }
     o.push_str("    }\n");
+    if pack {
+        o.push_str("\n    @Override\n    public void onDisable() {\n        ResourcePack.stop();\n    }\n\n    // Resource pack for joining players\n    @org.bukkit.event.EventHandler\n    public void onPackJoin(final org.bukkit.event.player.PlayerJoinEvent event) {\n        if (getConfig().getBoolean(\"resource-pack.send-on-join\", true)) ResourcePack.send(event.getPlayer());\n    }\n");
+    }
     for m in &parts.members {
         o.push('\n');
         for l in m.lines() {
@@ -1223,11 +1382,42 @@ fn fabric_main(
     o
 }
 
+/// Resource pack files for the export (read from the pack .zip).
+pub fn pack_files(
+    proj: &Project,
+    project_file: Option<&std::path::Path>,
+) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let s = &proj.settings;
+    if !s.pack.enabled() {
+        return Ok(vec![]);
+    }
+    let path = s.pack.resolve(project_file);
+    if !path.is_file() {
+        return Err(format!("Resourcepack nicht gefunden: {}", path.display()));
+    }
+    match s.platform {
+        Platform::Paper => {
+            let zip = crate::resourcepack::export_zip(&path, &s.name)?;
+            Ok(vec![("src/main/resources/resourcepack.zip".into(), zip)])
+        }
+        Platform::Fabric => Ok(crate::resourcepack::export_entries(&path, &s.name)?
+            .into_iter()
+            .filter(|(n, _)| n.starts_with("assets/"))
+            .map(|(n, d)| (format!("src/main/resources/{n}"), d))
+            .collect()),
+    }
+}
+
 /// Writes all generated files into `dir`, removing stale generated sources first.
 pub fn write_to(out: &Output, dir: &std::path::Path, package: &str) -> std::io::Result<()> {
     let src = dir.join("src/main/java").join(package.replace('.', "/"));
     if src.exists() {
         std::fs::remove_dir_all(&src)?;
+    }
+    // Resources are fully generated too (plugin.yml, pack files, ...).
+    let res = dir.join("src/main/resources");
+    if res.exists() {
+        std::fs::remove_dir_all(&res)?;
     }
     for (rel, data) in &out.files {
         let path = dir.join(rel);

@@ -90,6 +90,34 @@ pub fn field_editor(
                     }
                 });
         }
+        FieldKind::ItemModel => {
+            let models = crate::resourcepack::known_models();
+            let shown = if v.is_empty() {
+                t("(kein eigenes Modell)", "(no custom model)").to_string()
+            } else {
+                v.clone()
+            };
+            egui::ComboBox::from_id_salt(id_salt)
+                .width(width)
+                .selected_text(shown)
+                .height(300.0)
+                .show_ui(ui, |ui| {
+                    ui.set_min_width(220.0);
+                    ui.label(egui::RichText::new(t("Eigene ID eingeben:", "Type an id:")).size(11.0).color(theme::TEXT_WEAK));
+                    ui.add(egui::TextEdit::singleline(&mut v).hint_text("namespace:modell").desired_width(f32::INFINITY));
+                    ui.separator();
+                    if models.is_empty() {
+                        ui.label(egui::RichText::new(t(
+                            "Kein Resourcepack hinzugefügt. Füge eins unter „Ressourcen“ (🎨) in der Seitenleiste hinzu.",
+                            "No resource pack added. Add one under “Resources” (🎨) in the sidebar.",
+                        )).size(11.0).color(theme::TEXT_WEAK));
+                    }
+                    ui.selectable_value(&mut v, String::new(), t("(kein eigenes Modell)", "(no custom model)"));
+                    for m in &models {
+                        ui.selectable_value(&mut v, m.clone(), m);
+                    }
+                });
+        }
     }
     if v != before {
         values.insert(f.id.to_string(), v);

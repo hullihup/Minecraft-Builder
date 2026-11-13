@@ -4,7 +4,10 @@ import io.papermc.paper.registry.RegistryAccess;
 import io.papermc.paper.registry.RegistryKey;
 import java.time.Duration;
 import java.util.Locale;
+import java.util.ArrayList;
+import java.util.List;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.TextDecoration;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.kyori.adventure.title.Title;
 import org.bukkit.Bukkit;
@@ -17,7 +20,9 @@ import org.bukkit.attribute.AttributeInstance;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
+import org.bukkit.Particle;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 
@@ -141,5 +146,53 @@ __COMMON__
 
     public static void setTime(String world, double time) {
         world(world).setTime((long) time);
+    }
+
+    // ----- custom items & resources -------------------------------------------
+
+    public static ItemStack customItem(String id, double amount, String model, String name, String lore) {
+        Material m = Material.matchMaterial(id == null ? "" : id.trim());
+        if (m == null || !m.isItem() || m.isAir()) m = Material.PAPER;
+        ItemStack is = new ItemStack(m, Math.max(1, Math.min(m.getMaxStackSize(), (int) amount)));
+        ItemMeta meta = is.getItemMeta();
+        if (meta != null) {
+            if (model != null && !model.isBlank()) {
+                NamespacedKey k = NamespacedKey.fromString(model.trim().toLowerCase(Locale.ROOT));
+                if (k != null) meta.setItemModel(k);
+            }
+            if (name != null && !name.isEmpty()) {
+                meta.displayName(color(name).decoration(TextDecoration.ITALIC, false));
+            }
+            if (lore != null && !lore.isEmpty()) {
+                List<Component> lines = new ArrayList<>();
+                for (String line : lore.split("\\|")) lines.add(color(line).decoration(TextDecoration.ITALIC, false));
+                meta.lore(lines);
+            }
+            is.setItemMeta(meta);
+        }
+        return is;
+    }
+
+    public static void giveCustom(Player p, String id, double amount, String model, String name, String lore) {
+        ItemStack is = customItem(id, amount, model, name, lore);
+        p.getInventory().addItem(is).values()
+                .forEach(rest -> p.getWorld().dropItemNaturally(p.getLocation(), rest));
+    }
+
+    /** Model id of the held item (custom model if set, otherwise the item id). */
+    public static String heldModel(Player p) {
+        ItemStack is = p.getInventory().getItemInMainHand();
+        ItemMeta meta = is.getItemMeta();
+        if (meta != null && meta.hasItemModel()) return meta.getItemModel().toString();
+        return is.getType().getKey().toString();
+    }
+
+    public static void particles(Location l, String id, double count) {
+        Particle type = RegistryAccess.registryAccess().getRegistry(RegistryKey.PARTICLE_TYPE).get(key(id));
+        if (type == null || type.getDataType() != Void.class) {
+            __MAIN__.INSTANCE.getLogger().warning("Unknown or unsupported particle: " + id);
+            return;
+        }
+        l.getWorld().spawnParticle(type, l, Math.max(1, (int) count), 0.3, 0.3, 0.3, 0.0);
     }
 }

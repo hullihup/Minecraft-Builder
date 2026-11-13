@@ -1,9 +1,13 @@
 package __PKG__;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.core.particles.SimpleParticleType;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
@@ -24,6 +28,7 @@ import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.component.ItemLore;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
@@ -179,5 +184,43 @@ __COMMON__
 
     public static boolean isOp(CommandSourceStack source) {
         return source.permissions().hasPermission(Permissions.COMMANDS_GAMEMASTER);
+    }
+
+    // ----- custom items & resources -------------------------------------------
+
+    public static ItemStack customItem(String id, double amount, String model, String name, String lore) {
+        Item item = BuiltInRegistries.ITEM.getValue(id(id));
+        if (item == Items.AIR) item = Items.PAPER;
+        ItemStack st = new ItemStack(item, Math.max(1, Math.min(item.getDefaultMaxStackSize(), (int) amount)));
+        if (model != null && !model.isBlank()) st.set(DataComponents.ITEM_MODEL, id(model));
+        if (name != null && !name.isEmpty()) {
+            st.set(DataComponents.CUSTOM_NAME, color(name).copy().withStyle(s -> s.withItalic(false)));
+        }
+        if (lore != null && !lore.isEmpty()) {
+            List<Component> lines = new ArrayList<>();
+            for (String line : lore.split("\\|")) lines.add(color(line).copy().withStyle(s -> s.withItalic(false)));
+            st.set(DataComponents.LORE, new ItemLore(lines));
+        }
+        return st;
+    }
+
+    public static void giveCustom(ServerPlayer p, String id, double amount, String model, String name, String lore) {
+        ItemStack st = customItem(id, amount, model, name, lore);
+        if (!p.getInventory().add(st)) p.spawnAtLocation(p.level(), st);
+    }
+
+    /** Model id of the held item (custom model if set, otherwise the item id). */
+    public static String heldModel(ServerPlayer p) {
+        ItemStack st = p.getMainHandItem();
+        Identifier m = st.get(DataComponents.ITEM_MODEL);
+        return m != null ? m.toString() : itemId(st);
+    }
+
+    public static void particles(Loc l, String id, double count) {
+        if (BuiltInRegistries.PARTICLE_TYPE.getValue(id(id)) instanceof SimpleParticleType type) {
+            l.level().sendParticles(type, l.x(), l.y(), l.z(), Math.max(1, (int) count), 0.3, 0.3, 0.3, 0.0);
+        } else {
+            __MAIN__.LOGGER.warn("Unknown or unsupported particle: {}", id);
+        }
     }
 }

@@ -8,7 +8,9 @@ mod codegen;
 mod examples;
 mod i18n;
 mod model;
+mod resourcepack;
 mod theme;
+mod tools;
 mod ui;
 
 use std::path::PathBuf;
@@ -19,6 +21,16 @@ fn main() -> eframe::Result<()> {
     // Headless helpers, used for testing and scripting:
     //   minecraft-builder --export <project.mcb> <out-dir>
     //   minecraft-builder --selftest <paper|fabric> <out-dir>
+    // Used by the installer: store the language picked during installation.
+    if args.get(1).map(|a| a == "--lang").unwrap_or(false) {
+        let mut s = build::AppSettings::load();
+        s.german = args.get(2).map(|l| l != "en").unwrap_or(true);
+        s.save();
+        std::process::exit(0);
+    }
+    if args.get(1).map(|a| a == "--setup-tools").unwrap_or(false) {
+        std::process::exit(tools::setup_cli());
+    }
     if args.len() >= 4 && (args[1] == "--export" || args[1] == "--selftest") {
         let project = if args[1] == "--export" {
             match model::Project::load(std::path::Path::new(&args[2])) {
@@ -36,7 +48,25 @@ fn main() -> eframe::Result<()> {
             };
             examples::all_blocks_project(platform)
         };
-        let out = codegen::generate(&project);
+        let dir = PathBuf::from(&args[3]);
+        let mut out = codegen::generate(&project);
+        let project_file = if args[1] == "--export" {
+            Some(PathBuf::from(&args[2]))
+        } else {
+            // The self test bundles a tiny resource pack.
+            let _ = std::fs::create_dir_all(&dir);
+            if let Err(e) = std::fs::write(dir.join("testpack.zip"), examples::test_pack_zip()) {
+                eprintln!("cannot write test pack: {e}");
+            }
+            Some(dir.join("project.mcb"))
+        };
+        match codegen::pack_files(&project, project_file.as_deref()) {
+            Ok(f) => out.files.extend(f),
+            Err(e) => {
+                eprintln!("ERROR {e}");
+                std::process::exit(1);
+            }
+        }
         for p in &out.problems {
             eprintln!(
                 "{} [{:?}] {}",
@@ -45,7 +75,6 @@ fn main() -> eframe::Result<()> {
                 p.msg
             );
         }
-        let dir = PathBuf::from(&args[3]);
         if let Err(e) = codegen::write_to(&out, &dir, &project.settings.package) {
             eprintln!("cannot write: {e}");
             std::process::exit(2);

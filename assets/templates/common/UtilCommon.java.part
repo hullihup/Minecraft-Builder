@@ -57,3 +57,12 @@
     public static String arg(String[] args, int i) {
         return args != null && args.length > i ? args[i] : "";
     }
+
+    public static java.util.List<String> tab(String[] options, String prefix) {
+        String p = prefix == null ? "" : prefix.toLowerCase(java.util.Locale.ROOT);
+        java.util.List<String> out = new java.util.ArrayList<>();
+        for (String o : options) {
+            if (o.toLowerCase(java.util.Locale.ROOT).startsWith(p)) out.add(o);
+        }
+        return out;
+    }

@@ -228,8 +228,37 @@ pub fn new_project(name: &str, platform: Platform, starter: Starter) -> Project 
 }
 
 /// A project that uses every block that exists for `platform`. Used to test the code generator.
+/// A minimal resource pack with one item model, for tests.
+pub fn test_pack_zip() -> Vec<u8> {
+    use std::io::Write;
+    const PNG: &[u8] = include_bytes!("../assets/test-stab.png");
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut zw = zip::ZipWriter::new(&mut buf);
+        let o = zip::write::SimpleFileOptions::default();
+        let files: [(&str, &[u8]); 3] = [
+            (
+                "pack.mcmeta",
+                br#"{"pack":{"description":"Testpack","pack_format":75}}"#,
+            ),
+            (
+                "assets/magie/models/item/stab.json",
+                br#"{"parent":"minecraft:item/handheld","textures":{"layer0":"magie:item/stab"}}"#,
+            ),
+            ("assets/magie/textures/item/stab.png", PNG),
+        ];
+        for (n, d) in files {
+            zw.start_file(n, o).unwrap();
+            zw.write_all(d).unwrap();
+        }
+        zw.finish().unwrap();
+    }
+    buf.into_inner()
+}
+
 pub fn all_blocks_project(platform: Platform) -> Project {
     let mut p = new_project("Alle Bloecke", platform, Starter::Empty);
+    p.settings.pack.path = "testpack.zip".into();
     p.workspaces = vec![Workspace::new("Test")];
     let mut b = Builder { p: &mut p, ws: 0 };
     let defs: Vec<_> = blocks::all()
@@ -248,7 +277,12 @@ pub fn all_blocks_project(platform: Platform) -> Project {
         if d.id == "cancel_event" || d.id == "stop" {
             continue;
         }
-        let n = b.node(d.id, x, 0.0, &[]);
+        let vals: &[(&str, &str)] = if d.id == "custom_item" {
+            &[("model", "magie:stab")]
+        } else {
+            &[]
+        };
+        let n = b.node(d.id, x, 0.0, vals);
         x += 300.0;
         b.link(last.0, last.1, n, "in");
         // Branches get a log block each.

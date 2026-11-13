@@ -15,8 +15,43 @@ use std::sync::mpsc::Receiver;
 pub enum Activity {
     Workspaces,
     Blocks,
+    Resources,
     Project,
     Build,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Screen {
+    Home,
+    Editor,
+}
+
+/// Running Java/Gradle setup.
+pub struct SetupState {
+    pub rx: Receiver<crate::tools::SetupMsg>,
+    pub status: String,
+    pub progress: f32,
+    pub lines: Vec<String>,
+    pub result: Option<Result<(), String>>,
+}
+
+/// Cached information about the project's resource pack.
+#[derive(Default)]
+pub struct PackCache {
+    pub path: PathBuf,
+    pub info: Option<Result<crate::resourcepack::PackInfo, String>>,
+    pub thumbs: HashMap<String, Option<egui::TextureHandle>>,
+}
+
+/// Short info about a project file for the start screen.
+#[derive(Clone)]
+pub struct ProjectSummary {
+    pub name: String,
+    pub platform: Platform,
+    pub minecraft: String,
+    pub blocks: usize,
+    pub commands: usize,
+    pub modified: std::time::SystemTime,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -77,6 +112,7 @@ pub enum Dialog {
         name: String,
         platform: Platform,
         starter: Starter,
+        folder: String,
     },
     UnsavedChanges {
         then: AfterSave,
@@ -97,6 +133,7 @@ pub enum AfterSave {
     Quit,
     NewProject,
     Open,
+    Home,
 }
 
 /// "Add block" popup.
@@ -149,6 +186,19 @@ pub struct App {
     pub mc_job: Option<Receiver<Result<Vec<String>, String>>>,
     /// Focus this node on the next frame (workspace, node).
     pub focus_node: Option<(usize, NodeId)>,
+    pub screen: Screen,
+    /// First-start wizard step, if shown.
+    pub onboarding: Option<usize>,
+    /// Tutorial step, if running.
+    pub tutorial: Option<usize>,
+    pub setup: Option<SetupState>,
+    pub pack: PackCache,
+    pub show_commands: bool,
+    pub selected_command: Option<(usize, NodeId)>,
+    pub home_search: String,
+    pub summaries: HashMap<PathBuf, (std::time::SystemTime, Option<ProjectSummary>)>,
+    /// Screen rects of UI parts, for the tutorial highlights.
+    pub ui_rects: HashMap<&'static str, egui::Rect>,
     allow_close: bool,
     title: String,
 }
@@ -198,6 +248,16 @@ impl App {
             mc_versions: vec![],
             mc_job: None,
             focus_node: None,
+            screen: Screen::Home,
+            onboarding: None,
+            tutorial: None,
+            setup: None,
+            pack: PackCache::default(),
+            show_commands: false,
+            selected_command: None,
+            home_search: String::new(),
+            summaries: HashMap::new(),
+            ui_rects: HashMap::new(),
             allow_close: false,
             title: String::new(),
         };
@@ -210,12 +270,11 @@ impl App {
             ),
         );
         app.canvas.fit_request = true;
+        if !app.settings.onboarded {
+            app.onboarding = Some(0);
+        }
         if let Some(p) = open {
             app.open_path(p);
-        } else if let Some(p) = app.settings.recent.first().cloned() {
-            if p.is_file() {
-                app.open_path(p);
-            }
         }
         app
     }
@@ -265,6 +324,165 @@ impl App {
         self.gen_for = None;
         self.palette = None;
         self.canvas.fit_request = true;
+        self.screen = Screen::Editor;
+        self.selected_command = None;
+        self.refresh_pack(true);
+    }
+
+    /// Goes back to the start screen (asks to save first).
+    pub fn go_home(&mut self) {
+        if self.dirty() && self.screen == Screen::Editor {
+            self.dialog = Dialog::UnsavedChanges {
+                then: AfterSave::Home,
+            };
+            return;
+        }
+        self.screen = Screen::Home;
+        self.summaries.clear();
+    }
+
+    /// Reloads the resource pack info if the path changed (or `force`).
+    pub fn refresh_pack(&mut self, force: bool) {
+        let s = &self.project.settings.pack;
+        if !s.enabled() {
+            if self.pack.info.is_some() || force {
+                self.pack = PackCache::default();
+                crate::resourcepack::set_known_models(vec![]);
+            }
+            return;
+        }
+        let path = s.resolve(self.path.as_deref());
+        if !force && path == self.pack.path && self.pack.info.is_some() {
+            return;
+        }
+        let info = crate::resourcepack::inspect(&path);
+        crate::resourcepack::set_known_models(
+            info.as_ref()
+                .map(|i| i.item_models.clone())
+                .unwrap_or_default(),
+        );
+        self.pack = PackCache {
+            path,
+            info: Some(info),
+            thumbs: HashMap::new(),
+        };
+    }
+
+    /// Adds a resource pack .zip to the project (copied next to the project file).
+    pub fn add_pack(&mut self, src: PathBuf) {
+        match crate::resourcepack::inspect(&src) {
+            Err(e) => {
+                self.dialog = Dialog::Message {
+                    title: t("Resourcepack", "Resource pack").into(),
+                    text: e,
+                };
+            }
+            Ok(info) => {
+                let mut stored = src.display().to_string();
+                if let Some(dir) = self.path.as_ref().and_then(|p| p.parent()) {
+                    let name = format!("{}-resourcepack.zip", self.project.settings.id);
+                    let target = dir.join(&name);
+                    if target != src {
+                        match std::fs::copy(&src, &target) {
+                            Ok(_) => stored = name,
+                            Err(e) => self.log(
+                                Level::Warn,
+                                format!("Konnte das Pack nicht in den Projektordner kopieren: {e}"),
+                            ),
+                        }
+                    } else {
+                        stored = name;
+                    }
+                }
+                self.project.settings.pack.path = stored;
+                self.log(
+                    Level::Done,
+                    format!(
+                        "Resourcepack hinzugefügt: {} Modelle, {} Texturen",
+                        info.item_models.len(),
+                        info.textures.len()
+                    ),
+                );
+                self.refresh_pack(true);
+            }
+        }
+    }
+
+    /// Loads the project summaries for the start screen.
+    pub fn project_summary(&mut self, p: &PathBuf) -> Option<ProjectSummary> {
+        let modified = std::fs::metadata(p).and_then(|m| m.modified()).ok()?;
+        if let Some((t, s)) = self.summaries.get(p) {
+            if *t == modified {
+                return s.clone();
+            }
+        }
+        let s = Project::load(p).ok().map(|proj| ProjectSummary {
+            name: proj.settings.name.clone(),
+            platform: proj.settings.platform,
+            minecraft: proj.settings.versions.minecraft.clone(),
+            blocks: proj.workspaces.iter().map(|w| w.nodes.len()).sum(),
+            commands: proj
+                .workspaces
+                .iter()
+                .flat_map(|w| &w.nodes)
+                .filter(|n| n.kind == "ev_command")
+                .count(),
+            modified,
+        });
+        self.summaries.insert(p.clone(), (modified, s.clone()));
+        s
+    }
+
+    pub fn start_tools_setup(&mut self, ctx: &egui::Context, force_jdk: bool) {
+        if self
+            .setup
+            .as_ref()
+            .map(|s| s.result.is_none())
+            .unwrap_or(false)
+        {
+            return;
+        }
+        self.setup = Some(SetupState {
+            rx: crate::tools::start_setup(force_jdk, Some(ctx.clone())),
+            status: t("Starte…", "Starting…").into(),
+            progress: -1.0,
+            lines: vec![],
+            result: None,
+        });
+    }
+
+    fn poll_setup(&mut self) {
+        let Some(s) = self.setup.as_mut() else { return };
+        let mut logs = vec![];
+        while let Ok(m) = s.rx.try_recv() {
+            match m {
+                crate::tools::SetupMsg::Status(x) => {
+                    s.status = x.clone();
+                    logs.push((Level::Info, x));
+                }
+                crate::tools::SetupMsg::Progress(p) => s.progress = p,
+                crate::tools::SetupMsg::Line(l) => {
+                    s.lines.push(l);
+                    if s.lines.len() > 200 {
+                        s.lines.remove(0);
+                    }
+                }
+                crate::tools::SetupMsg::Done(r) => {
+                    match &r {
+                        Ok(()) => logs.push((
+                            Level::Done,
+                            t("Java & Gradle sind bereit.", "Java & Gradle are ready.").to_string(),
+                        )),
+                        Err(e) => logs.push((Level::Error, e.clone())),
+                    }
+                    s.result = Some(r);
+                    crate::tools::invalidate_status();
+                }
+            }
+        }
+        for (l, x) in logs {
+            self.log(l, x);
+        }
     }
 
     pub fn open_path(&mut self, p: PathBuf) {
@@ -315,16 +533,59 @@ impl App {
             };
             return;
         }
+        self.new_project_with(Starter::Welcome);
+    }
+
+    pub fn new_project_with(&mut self, starter: Starter) {
         self.dialog = Dialog::NewProject {
-            name: "MeinPlugin".into(),
+            name: t("MeinPlugin", "MyPlugin").into(),
             platform: Platform::Paper,
-            starter: Starter::Welcome,
+            starter,
+            folder: build::default_projects_dir().display().to_string(),
         };
     }
 
-    pub fn create_project(&mut self, name: &str, platform: Platform, starter: Starter) {
+    /// Creates the project and saves it right away into `<folder>/<name>/<id>.mcb`.
+    pub fn create_project(
+        &mut self,
+        name: &str,
+        platform: Platform,
+        starter: Starter,
+        folder: &str,
+    ) {
         let p = examples::new_project(name, platform, starter);
-        self.set_project(p, None);
+        let mut path = None;
+        if !folder.trim().is_empty() {
+            let dir = PathBuf::from(folder.trim()).join(crate::model::slug(name));
+            let file = dir.join(format!("{}.mcb", p.settings.id));
+            match std::fs::create_dir_all(&dir)
+                .map_err(|e| e.to_string())
+                .and_then(|_| {
+                    if file.exists() {
+                        Err(t(
+                            "Dort gibt es schon ein Projekt mit diesem Namen.",
+                            "A project with this name already exists there.",
+                        )
+                        .into())
+                    } else {
+                        p.save(&file)
+                    }
+                }) {
+                Ok(()) => {
+                    self.settings.add_recent(&file);
+                    self.settings.save();
+                    path = Some(file);
+                }
+                Err(e) => {
+                    self.dialog = Dialog::Message {
+                        title: t("Fehler", "Error").into(),
+                        text: e,
+                    };
+                    return;
+                }
+            }
+        }
+        self.set_project(p, path);
         self.log(
             Level::Info,
             format!("Neues Projekt „{name}“ ({})", platform.label()),
@@ -381,6 +642,10 @@ impl App {
             AfterSave::Open => {
                 self.saved = self.project.clone();
                 self.open_dialog_now();
+            }
+            AfterSave::Home => {
+                self.saved = self.project.clone();
+                self.go_home();
             }
         }
     }
@@ -635,6 +900,7 @@ impl App {
         self.job_export_only = export_only;
         self.job = Some(build::start(
             self.project.clone(),
+            self.path.clone(),
             dir,
             !export_only,
             ctx.clone(),
@@ -760,11 +1026,23 @@ impl App {
         }
     }
 
+    fn home_shortcuts(&mut self, ctx: &egui::Context) {
+        use egui::{Key, KeyboardShortcut, Modifiers};
+        if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::O)))
+        {
+            self.open_dialog();
+        }
+        if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::N)))
+        {
+            self.new_project_dialog();
+        }
+    }
+
     // --------------------------------------------------------------- close
 
     fn handle_close(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
-            if self.dirty() {
+            if self.dirty() && self.screen == Screen::Editor {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.dialog = Dialog::UnsavedChanges {
                     then: AfterSave::Quit,
@@ -776,6 +1054,14 @@ impl App {
     }
 
     fn update_title(&mut self, ctx: &egui::Context) {
+        if self.screen == Screen::Home {
+            let title = "Minecraft Builder".to_string();
+            if title != self.title {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+                self.title = title;
+            }
+            return;
+        }
         let name = match &self.path {
             Some(p) => p
                 .file_name()
@@ -812,9 +1098,29 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll_jobs();
-        self.shortcuts(&ctx);
+        self.poll_setup();
         self.handle_close(&ctx);
+
+        if self.screen == Screen::Home {
+            self.home_shortcuts(&ctx);
+            ui::home::show(self, ui);
+            ui::dialogs::show(self, &ctx);
+            ui::onboarding::show(self, &ctx);
+            self.update_title(&ctx);
+            if self
+                .setup
+                .as_ref()
+                .map(|s| s.result.is_none())
+                .unwrap_or(false)
+            {
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            }
+            return;
+        }
+
+        self.shortcuts(&ctx);
         self.refresh_generated();
+        self.refresh_pack(false);
 
         ui::panels::top_bar(self, ui);
         ui::panels::status_bar(self, ui);
@@ -834,10 +1140,24 @@ impl eframe::App for App {
             ui::canvas::show(self, ui);
         });
         ui::dialogs::show(self, &ctx);
+        if self.show_commands {
+            ui::commands::show(self, &ctx);
+        }
+        ui::onboarding::show(self, &ctx);
+        ui::onboarding::tutorial(self, &ctx);
 
         self.commit_undo(&ctx);
         self.update_title(&ctx);
-        if self.job.is_some() || self.version_job.is_some() || self.mc_job.is_some() {
+        let setup_running = self
+            .setup
+            .as_ref()
+            .map(|s| s.result.is_none())
+            .unwrap_or(false);
+        if self.job.is_some()
+            || self.version_job.is_some()
+            || self.mc_job.is_some()
+            || setup_running
+        {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
     }
