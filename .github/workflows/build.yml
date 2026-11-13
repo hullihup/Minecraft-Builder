@@ -1,0 +1,52 @@
+name: Build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --release
+      - name: Build
+        run: cargo build --release
+      - name: Upload exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: minecraft-builder-windows-x64
+          path: target/release/minecraft-builder.exe
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/minecraft-builder.exe
+
+  generated-code:
+    # Checks that the generated Paper plugin and Fabric mod really compile.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+      - name: Generate test projects
+        run: |
+          cargo run --release -- --selftest paper  target/selftest/paper
+          cargo run --release -- --selftest fabric target/selftest/fabric
+      - name: Compile Paper plugin
+        working-directory: target/selftest/paper
+        run: ./gradlew build --no-daemon
+      - name: Compile Fabric mod
+        working-directory: target/selftest/fabric
+        run: ./gradlew build --no-daemon

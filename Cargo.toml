@@ -1,0 +1,36 @@
+[package]
+name = "minecraft-builder"
+version = "0.1.0"
+edition = "2024"
+description = "Visual block editor for Minecraft plugins (Paper) and mods (Fabric)"
+license = "MIT"
+
+[[bin]]
+name = "minecraft-builder"
+path = "src/main.rs"
+
+[features]
+default = ["wgpu"]
+# GPU renderer (DirectX 12 / Vulkan / Metal).
+wgpu = ["eframe/wgpu"]
+# OpenGL renderer, useful for old graphics drivers and headless testing.
+glow = ["eframe/glow"]
+
+[dependencies]
+chrono = "0.4.45"
+eframe = { version = "0.37", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "links", "system_fonts", "x11", "wayland"] }
+egui = "0.37"
+open = "5"
+rfd = "0.18"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+ureq = { version = "3", features = ["platform-verifier"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[build-dependencies]
+winresource = "0.1"

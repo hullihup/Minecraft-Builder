@@ -1,0 +1,59 @@
+    // ----- text & numbers -------------------------------------------------
+
+    public static String fmt(double d) {
+        if (Double.isNaN(d) || Double.isInfinite(d)) return String.valueOf(d);
+        if (d == Math.rint(d) && Math.abs(d) < 1e15) return Long.toString((long) d);
+        return String.valueOf(Math.round(d * 100.0) / 100.0);
+    }
+
+    public static double num(String s) {
+        if (s == null) return 0;
+        try {
+            return Double.parseDouble(s.trim().replace(',', '.'));
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    public static boolean isNum(String s) {
+        if (s == null) return false;
+        try {
+            Double.parseDouble(s.trim().replace(',', '.'));
+            return true;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
+    public static String format(String f, String a, String b, String c, String d) {
+        return f.replace("{0}", a).replace("{1}", b).replace("{2}", c).replace("{3}", d);
+    }
+
+    public static boolean textEquals(String a, String b, boolean ignoreCase) {
+        if (a == null || b == null) return a == b;
+        return ignoreCase ? a.trim().equalsIgnoreCase(b.trim()) : a.equals(b);
+    }
+
+    public static double math(double a, String op, double b) {
+        switch (op) {
+            case "+": return a + b;
+            case "-": return a - b;
+            case "*": return a * b;
+            case "/": return b == 0 ? 0 : a / b;
+            case "%": return b == 0 ? 0 : a % b;
+            case "pow": return Math.pow(a, b);
+            case "min": return Math.min(a, b);
+            case "max": return Math.max(a, b);
+            default: return 0;
+        }
+    }
+
+    public static double random(double min, double max) {
+        long lo = Math.round(Math.min(min, max));
+        long hi = Math.round(Math.max(min, max));
+        return java.util.concurrent.ThreadLocalRandom.current().nextLong(lo, hi + 1);
+    }
+
+    public static String arg(String[] args, int i) {
+        return args != null && args.length > i ? args[i] : "";
+    }

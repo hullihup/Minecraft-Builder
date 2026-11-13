@@ -1,0 +1,4 @@
+/target
+*.mcb.bak
+*-paper-build/
+*-fabric-build/
