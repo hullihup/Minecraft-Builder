@@ -60,7 +60,6 @@ pub enum Icon {
     Sliders,
     Cloud,
     Chest,
-    Key,
     Info,
 }
 
@@ -492,12 +491,6 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
             p.rect(3.5, 6.0, 20.5, 19.0, 1.5);
             p.line(&[(3.5, 11.0), (20.5, 11.0)]);
             p.rect(10.5, 9.5, 13.5, 13.0, 0.5);
-        }
-        Key => {
-            p.circle(8.0, 12.0, 4.0);
-            p.line(&[(12.0, 12.0), (21.0, 12.0)]);
-            p.line(&[(17.0, 12.0), (17.0, 15.5)]);
-            p.line(&[(20.5, 12.0), (20.5, 15.0)]);
         }
         Info => {
             p.circle(12.0, 12.0, 9.0);

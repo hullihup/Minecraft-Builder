@@ -1837,10 +1837,27 @@ fn row_label(ui: &mut Ui, w: f32, text: egui::RichText) -> egui::Response {
 
 /// First sentence of a block description, shortened to fit on the block.
 fn short_desc(full: &str) -> String {
-    let first = match full.find(". ") {
-        Some(i) => &full[..=i],
-        None => full,
-    };
+    // End of the first sentence: ". " followed by a capital letter, but not after
+    // abbreviations like "z. B." or "e.g.".
+    let chars: Vec<(usize, char)> = full.char_indices().collect();
+    let mut end = full.len();
+    for w in 0..chars.len().saturating_sub(2) {
+        let (i, c) = chars[w];
+        if c != '.' || chars[w + 1].1 != ' ' {
+            continue;
+        }
+        let next = chars[w + 2].1;
+        let word_len = full[..i]
+            .chars()
+            .rev()
+            .take_while(|ch| ch.is_alphanumeric())
+            .count();
+        if word_len > 2 && (next.is_uppercase() || next == '„' || next == '“') {
+            end = i + 1;
+            break;
+        }
+    }
+    let first = &full[..end];
     let max = 96;
     if first.chars().count() > max {
         let cut: String = first.chars().take(max - 1).collect();

@@ -110,12 +110,6 @@ pub enum ItemMode {
 }
 
 impl ItemMode {
-    pub const ALL: [ItemMode; 4] = [
-        ItemMode::Auto,
-        ItemMode::Replace,
-        ItemMode::CommandOnly,
-        ItemMode::Off,
-    ];
     pub fn label(self) -> (&'static str, &'static str) {
         match self {
             ItemMode::Auto => ("Wie im Pack", "As in the pack"),

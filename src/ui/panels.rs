@@ -1479,12 +1479,18 @@ fn inspector(app: &mut App, ui: &mut Ui) {
         }
 
         let w = ui.available_width();
+        let mut open_menu = false;
         if !def.fields.is_empty() {
             section_header(ui, t("Einstellungen", "Settings"));
             ui.add_space(4.0);
             for f in &def.fields {
                 labeled(ui, tl(f.label), |ui| {
                     widgets::field_editor(ui, f, &mut node.values, w, ("insp_f", id, f.id));
+                    if matches!(f.kind, blocks::FieldKind::Menu)
+                        && icons::button(ui, Some(Icon::Chest), t("Menü bearbeiten", "Edit menu")).clicked()
+                    {
+                        open_menu = true;
+                    }
                 });
             }
         }
@@ -1528,6 +1534,12 @@ fn inspector(app: &mut App, ui: &mut Ui) {
                         }
                     },
                 );
+                ui.label(
+                    RichText::new(blocks::pin_help(def, p, false))
+                        .size(11.0)
+                        .color(theme::TEXT_WEAK),
+                );
+                ui.add_space(4.0);
             }
         }
         let outs: Vec<_> = def
@@ -1543,6 +1555,12 @@ fn inspector(app: &mut App, ui: &mut Ui) {
                     ui.label(RichText::new("●").color(p.ty.color()));
                     ui.label(format!("{} · {}", p.label.text(), tl(p.ty.label())));
                 });
+                ui.label(
+                    RichText::new(blocks::pin_help(def, p, true))
+                        .size(11.0)
+                        .color(theme::TEXT_WEAK),
+                );
+                ui.add_space(4.0);
             }
             ui.add_space(8.0);
         }
@@ -1563,6 +1581,9 @@ fn inspector(app: &mut App, ui: &mut Ui) {
                 delete = true;
             }
         });
+        if open_menu {
+            app.menu_edit = Some(crate::ui::menu_editor::MenuEdit::new(ws_idx, id));
+        }
         if open_cmds {
             let cmd = app.project.workspaces[ws_idx]
                 .node(id)

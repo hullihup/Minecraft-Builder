@@ -184,6 +184,7 @@ pub fn show(app: &mut App, ctx: &egui::Context, close: &mut bool) {
                     })
                     .inner_margin(egui::Margin::symmetric(8, 16))
                     .show(ui, |ui| {
+                      ui.vertical(|ui| {
                         ui.set_width(196.0);
                         ui.set_height(528.0);
                         ui.horizontal(|ui| {
@@ -232,6 +233,7 @@ pub fn show(app: &mut App, ctx: &egui::Context, close: &mut bool) {
                                 app.settings_tab = tab;
                             }
                         }
+                      });
                     });
                 egui::Frame::new().inner_margin(20).show(ui, |ui| {
                     ui.set_width(ui.available_width());
@@ -308,20 +310,6 @@ fn general(app: &mut App, ui: &mut Ui) {
     section_header(ui, t("Java & Gradle", "Java & Gradle"));
     ui.add_space(4.0);
     crate::ui::home::tool_status(app, ui, &ctx);
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        let running = app
-            .setup
-            .as_ref()
-            .map(|s| s.result.is_none())
-            .unwrap_or(false);
-        if ui
-            .add_enabled(!running, egui::Button::new(t("Erneut einrichten", "Set up again")))
-            .clicked()
-        {
-            app.start_tools_setup(&ctx, false);
-        }
-    });
     ui.add_space(14.0);
     section_header(ui, t("Hilfe", "Help"));
     ui.add_space(4.0);
@@ -655,7 +643,7 @@ fn server_form(app: &mut App, ui: &mut Ui) {
         .map(|d| d.id != 0)
         .unwrap_or(false);
     ui.horizontal(|ui| {
-        if icons::icon_button(ui, Icon::ChevronRight, 22.0, "").clicked() {
+        if ui.button(t("← Zurück", "← Back")).clicked() {
             app.server_ui.reset();
         }
         ui.label(

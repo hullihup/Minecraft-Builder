@@ -457,4 +457,122 @@ mod tests {
         assert!(text.contains("\r\n\r\nDATA\r\n"));
         assert!(text.ends_with(&format!("--{boundary}--\r\n")));
     }
+
+    /// A tiny stand-in for the panel + node: answers the calls the client makes and records them.
+    fn mock_panel(requests: usize) -> (String, std::thread::JoinHandle<Vec<(String, String, Vec<u8>)>>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let base2 = base.clone();
+        let handle = std::thread::spawn(move || {
+            let mut seen = vec![];
+            for _ in 0..requests {
+                let (mut sock, _) = listener.accept().unwrap();
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 4096];
+                let (head_end, len) = loop {
+                    let n = sock.read(&mut tmp).unwrap();
+                    buf.extend_from_slice(&tmp[..n]);
+                    if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&buf[..i]).to_lowercase();
+                        let len = head
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length:"))
+                            .and_then(|v| v.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        break (i + 4, len);
+                    }
+                    assert!(n > 0);
+                };
+                while buf.len() < head_end + len {
+                    let n = sock.read(&mut tmp).unwrap();
+                    buf.extend_from_slice(&tmp[..n]);
+                }
+                let head = String::from_utf8_lossy(&buf[..head_end]).to_string();
+                let first = head.lines().next().unwrap_or("").to_string();
+                let path = first.split(' ').nth(1).unwrap_or("").to_string();
+                let auth = head
+                    .lines()
+                    .find(|l| l.to_lowercase().starts_with("authorization:"))
+                    .unwrap_or("")
+                    .to_string();
+                let body = buf[head_end..].to_vec();
+                let (status, json) = if path.starts_with("/upload/file") {
+                    (200, "{}".to_string())
+                } else if !auth.contains("Bearer c7sp_") {
+                    (401, r#"{"errors":["invalid api key"]}"#.to_string())
+                } else if path == "/api/client/account" {
+                    (200, r#"{"user":{"username":"steve"}}"#.to_string())
+                } else if path.starts_with("/api/client/servers?") {
+                    (200, r#"{"servers":{"total":1,"per_page":50,"page":1,"data":[{"uuid":"1111-2222","uuid_short":"1111","name":"Survival","description":null,"node_name":"node1"}]}}"#.to_string())
+                } else if path.contains("/files/list") {
+                    (200, r#"{"entries":{"total":2,"data":[{"name":"meinplugin-0.9.jar"},{"name":"anderes.jar"}]}}"#.to_string())
+                } else if path.ends_with("/files/upload") {
+                    (200, format!(r#"{{"url":"{base2}/upload/file?token=abc"}}"#))
+                } else {
+                    (200, "{}".to_string())
+                };
+                let resp = format!(
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{json}",
+                    json.len()
+                );
+                sock.write_all(resp.as_bytes()).unwrap();
+                seen.push((first, auth, body));
+            }
+            seen
+        });
+        (base, handle)
+    }
+
+    #[test]
+    fn connects_and_lists_servers() {
+        let key = format!("c7sp_{}", "k".repeat(43));
+        let (base, h) = mock_panel(2);
+        assert_eq!(check_account(&base, &key).unwrap(), "steve");
+        let servers = list_servers(&base, &key).unwrap();
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].name, "Survival");
+        assert_eq!(servers[0].uuid, "1111-2222");
+        let seen = h.join().unwrap();
+        assert!(seen[0].1.ends_with(&key));
+
+        let (base, h) = mock_panel(1);
+        let err = check_account(&base, "falsch").unwrap_err();
+        assert!(err.contains("401"), "{err}");
+        h.join().unwrap();
+    }
+
+    #[test]
+    fn uploads_the_jar_and_cleans_up_old_versions() {
+        let dir = std::env::temp_dir().join(format!("mcb-deploy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let jar = dir.join("meinplugin-1.0.0.jar");
+        std::fs::write(&jar, b"JARDATA").unwrap();
+        let (base, h) = mock_panel(6);
+        let cfg = ServerConfig {
+            id: 1,
+            url: base,
+            api_key: format!("c7sp_{}", "k".repeat(43)),
+            server_uuid: "1111-2222".into(),
+            server_name: "Survival".into(),
+            after: AfterUpload::Restart,
+            ..Default::default()
+        };
+        let log = deploy(&cfg, &jar, "plugins", "meinplugin").unwrap();
+        let seen = h.join().unwrap();
+        let lines: Vec<&str> = seen.iter().map(|s| s.0.as_str()).collect();
+        assert!(lines[0].starts_with("POST /api/client/servers/1111-2222/files/create-directory"));
+        assert!(String::from_utf8_lossy(&seen[0].2).contains("\"name\":\"plugins\""));
+        assert!(lines[1].starts_with("GET /api/client/servers/1111-2222/files/list?directory=%2Fplugins"));
+        assert!(lines[2].starts_with("POST /api/client/servers/1111-2222/files/delete"));
+        let del = String::from_utf8_lossy(&seen[2].2).to_string();
+        assert!(del.contains("meinplugin-0.9.jar") && !del.contains("anderes.jar"), "{del}");
+        assert!(lines[3].starts_with("GET /api/client/servers/1111-2222/files/upload"));
+        assert!(lines[4].starts_with("POST /upload/file?token=abc&directory=%2Fplugins"));
+        let up = String::from_utf8_lossy(&seen[4].2).to_string();
+        assert!(up.contains("filename=\"meinplugin-1.0.0.jar\"") && up.contains("JARDATA"));
+        assert!(lines[5].starts_with("POST /api/client/servers/1111-2222/power"));
+        assert!(String::from_utf8_lossy(&seen[5].2).contains("restart"));
+        assert_eq!(log.len(), 3, "{log:?}");
+    }
 }

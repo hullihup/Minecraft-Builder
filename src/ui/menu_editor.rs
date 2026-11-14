@@ -242,6 +242,7 @@ pub fn mc_text(text: &str, default: Color32, size: f32) -> egui::text::LayoutJob
 }
 
 /// Text without color codes.
+#[cfg(test)]
 pub fn strip_codes(text: &str) -> String {
     let mut out = String::new();
     let mut chars = text.chars().peekable();
@@ -1101,8 +1102,9 @@ pub fn item_picker(app: &mut App, ctx: &egui::Context) {
                 }
             }
 
-            let cell = 62.0_f32;
-            let cols = 10usize;
+            let cell_w = 102.0_f32;
+            let cell = 78.0_f32;
+            let cols = 6usize;
             let n_rows = entries.len().div_ceil(cols);
             ui.label(
                 RichText::new(format!("{} {}", entries.len(), t("Treffer", "results")))
@@ -1143,7 +1145,7 @@ pub fn item_picker(app: &mut App, ctx: &egui::Context) {
                                         entries.iter().skip(row * cols).take(cols)
                                     {
                                         let (r, resp) =
-                                            ui.allocate_exact_size(vec2(cell, cell), Sense::click());
+                                            ui.allocate_exact_size(vec2(cell_w, cell), Sense::click());
                                         let inner = r.shrink(3.0);
                                         ui.painter().rect_filled(
                                             inner,
@@ -1162,7 +1164,29 @@ pub fn item_picker(app: &mut App, ctx: &egui::Context) {
                                                 StrokeKind::Inside,
                                             );
                                         }
-                                        draw_item(app, ui, inner.shrink(9.0), item, model);
+                                        let icon = Rect::from_center_size(
+                                            pos2(inner.center().x, inner.top() + 27.0),
+                                            vec2(38.0, 38.0),
+                                        );
+                                        draw_item(app, ui, icon, item, model);
+                                        // Name below the picture.
+                                        let short = if model.is_empty() {
+                                            label.clone()
+                                        } else {
+                                            label.rsplit(':').next().unwrap_or(label).to_string()
+                                        };
+                                        let mut job = egui::text::LayoutJob::simple_singleline(
+                                            short,
+                                            FontId::proportional(10.0),
+                                            if resp.hovered() { theme::TEXT } else { theme::TEXT_WEAK },
+                                        );
+                                        job.wrap = egui::text::TextWrapping::truncate_at_width(cell_w - 14.0);
+                                        let g = ui.fonts_mut(|f| f.layout_job(job));
+                                        ui.painter().galley(
+                                            pos2(inner.center().x - g.size().x / 2.0, inner.bottom() - 19.0),
+                                            g,
+                                            theme::TEXT_WEAK,
+                                        );
                                         if resp.hovered() {
                                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                                         }
