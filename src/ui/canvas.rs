@@ -1025,7 +1025,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             if !adv_open && hidden.iter().any(|h| h.id == pin.id) {
                 continue;
             }
-            if node.kind.starts_with("data_")
+            if def.field("scope").is_some()
                 && pin.id == "player"
                 && node.values.get("scope").map(|s| s.as_str()) == Some("global")
             {

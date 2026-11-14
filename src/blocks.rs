@@ -602,6 +602,11 @@ const WEATHER: &[(&str, L)] = &[
     ("thunder", ("Gewitter", "Thunder")),
 ];
 
+const MENU_SCOPES: &[(&str, L)] = &[
+    ("player", ("Diesen Spieler", "This player")),
+    ("global", ("Alle Spieler", "All players")),
+];
+
 const EQUIP_SLOTS: &[(&str, L)] = &[
     ("HEAD", ("Kopf", "Head")),
     ("CHEST", ("Brust", "Chest")),
@@ -2116,6 +2121,32 @@ fn build_all() -> Vec<BlockDef> {
             .h(("Die ID des angeklickten Platzes aus dem Menü-Editor (leer, wenn er keine hat).", "The ID of the clicked slot from the menu editor (empty if it has none)."))
             .pout("model", "Util.modelOf(event.getCurrentItem())")
             .pout("id", "Util.menuId(event.getCurrentItem())"),
+    );
+    v.push(
+        b("replace_menu", C::Player, K::Action,
+            ("Menü ersetzen", "Replace menu"),
+            ("Tauscht ein Menü gegen ein anderes aus – für einen Spieler oder für alle. Wer danach ein Menü mit diesem Menü-Namen öffnet, sieht das neue Menü (bleibt nach Neustart erhalten). Ist es gerade offen, wird es sofort ausgetauscht. Mit „Menü zurücksetzen“ kommt das alte zurück. Nur Paper.",
+             "Swaps a menu for another one – for one player or for everyone. Whoever opens a menu with this menu name afterwards sees the new menu (survives restarts). If it is open right now, it is swapped at once. “Reset menu” brings the old one back. Paper only."))
+            .f("scope", ("Für", "For"), F::Choice(MENU_SCOPES), "player")
+            .f("menu", ("Menü-Name", "Menu name"), F::Text, "shop")
+            .f("items", ("Items", "Items"), F::Menu, "13\tminecraft:emerald\t&aNeues Menü\t&7Nur für dich\t1\t\t\t")
+            .i("player", p_player, T::Player, "")
+            .h(("Für wen das Menü ausgetauscht wird. Nicht verbunden = der Spieler aus dem Event. Bei „Alle Spieler“ wird er nicht gebraucht.", "Whose menu is swapped. Not connected = the player from the event. Not needed with “All players”."))
+            .i("title", ("Titel", "Title"), T::Text, "&8Shop")
+            .h(("Überschrift des neuen Menüs (mit &-Farbcodes).", "Heading of the new menu (with & color codes)."))
+            .i("rows", ("Reihen", "Rows"), T::Number, "3")
+            .h(("Wie viele Reihen das neue Menü hat (1–6).", "How many rows the new menu has (1–6)."))
+            .paper("Util.replaceMenu(${in:player}, \"${f:scope}\".equals(\"global\"), ${s:menu}, ${in:title}, ${in:rows}, ${s:items});"),
+    );
+    v.push(
+        b("reset_menu", C::Player, K::Action,
+            ("Menü zurücksetzen", "Reset menu"),
+            ("Macht „Menü ersetzen“ rückgängig: Der Spieler (oder alle) sieht wieder das ursprüngliche Menü aus „Menü öffnen“. Nur Paper.",
+             "Undoes “Replace menu”: the player (or everyone) sees the original menu from “Open menu” again. Paper only."))
+            .f("scope", ("Für", "For"), F::Choice(MENU_SCOPES), "player")
+            .f("menu", ("Menü-Name", "Menu name"), F::Text, "shop")
+            .i("player", p_player, T::Player, "")
+            .paper("Util.resetMenu(${in:player}, \"${f:scope}\".equals(\"global\"), ${s:menu});"),
     );
     v.push(
         b(

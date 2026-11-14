@@ -588,9 +588,16 @@ pub fn all_blocks_project(platform: Platform) -> Project {
         {
             last = (n, "next");
         } else {
-            // "if"/"chance" end the chain; continue from the log in the first branch.
+            // Branching blocks ("if", "chance", "load location" …) end the chain;
+            // continue from a log in their first branch.
+            let first = d
+                .outputs
+                .iter()
+                .find(|o| o.ty == PinType::Exec)
+                .map(|o| o.id.to_string())
+                .unwrap_or_else(|| "then".into());
             let l = b.node("log", x, 700.0, &[]);
-            b.link(n, "then", l, "in");
+            b.link(n, &first, l, "in");
             last = (l, "next");
         }
     }

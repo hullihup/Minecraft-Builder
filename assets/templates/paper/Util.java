@@ -291,6 +291,10 @@ __COMMON__
     /** Inventory holder that marks menus opened by "Open menu". */
     public static final class MenuHolder implements InventoryHolder {
         public final String id;
+        /** What "Open menu" asked for (before a replacement), to rebuild the menu. */
+        String baseTitle = "";
+        double baseRows = 3;
+        String baseItems = "";
         /** Slots whose item may be taken out by the player. */
         public final java.util.Set<Integer> takeable = new java.util.HashSet<>();
         private Inventory inventory;
@@ -307,6 +311,16 @@ __COMMON__
 
     public static void openMenu(Player p, String id, String title, double rows, String items) {
         MenuHolder holder = new MenuHolder(id);
+        holder.baseTitle = title;
+        holder.baseRows = rows;
+        holder.baseItems = items;
+        // "Replace menu": this player (or everyone) gets another layout.
+        String[] o = menuOverride(p, id);
+        if (o != null) {
+            title = o[0];
+            rows = num(o[1]);
+            items = o[2];
+        }
         int size = 9 * Math.max(1, Math.min(6, (int) rows));
         Inventory inv = Bukkit.createInventory(holder, size, color(title));
         holder.inventory = inv;
@@ -338,6 +352,47 @@ __COMMON__
         if (is == null || !is.hasItemMeta()) return "";
         String v = is.getItemMeta().getPersistentDataContainer().get(menuKey(), org.bukkit.persistence.PersistentDataType.STRING);
         return v == null ? "" : v;
+    }
+
+    // ----- replaced menus -------------------------------------------------------
+
+    static String menuStoreKey(Player p, boolean global, String id) {
+        return "menu." + (global || p == null ? "global" : p.getUniqueId().toString()) + "." + id;
+    }
+
+    /** Replacement of a menu for this player (or everyone): title, rows, items. */
+    static String[] menuOverride(Player p, String id) {
+        String v = Storage.getText(menuStoreKey(p, false, id));
+        if (v.isEmpty()) v = Storage.getText(menuStoreKey(p, true, id));
+        if (v.isEmpty()) return null;
+        String[] parts = v.split("\u0001", 3);
+        return parts.length == 3 ? parts : null;
+    }
+
+    public static void replaceMenu(Player p, boolean global, String id, String title, double rows, String items) {
+        if (!global && p == null) return;
+        Storage.setText(menuStoreKey(p, global, id), title + "\u0001" + (int) rows + "\u0001" + items);
+        refreshMenu(p, global, id);
+    }
+
+    public static void resetMenu(Player p, boolean global, String id) {
+        if (!global && p == null) return;
+        Storage.removeText(menuStoreKey(p, global, id));
+        refreshMenu(p, global, id);
+    }
+
+    /** Players who have this menu open see the new layout right away (next tick, safe inside click events). */
+    static void refreshMenu(Player p, boolean global, String id) {
+        List<Player> targets = new ArrayList<>();
+        if (global) targets.addAll(Bukkit.getOnlinePlayers());
+        else if (p != null) targets.add(p);
+        Bukkit.getScheduler().runTask(__MAIN__.INSTANCE, () -> {
+            for (Player o : targets) {
+                if (o.getOpenInventory().getTopInventory().getHolder() instanceof MenuHolder h && h.id.equals(id)) {
+                    openMenu(o, id, h.baseTitle, h.baseRows, h.baseItems);
+                }
+            }
+        });
     }
 
     /** Keeps items inside menus unless their slot is marked as takeable. */

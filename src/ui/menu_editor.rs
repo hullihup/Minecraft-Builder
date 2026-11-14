@@ -1016,7 +1016,14 @@ fn apply_pick(app: &mut App, target: &PickTarget, item: String, model: String) {
                 return;
             };
             let (ws, nid) = (e.ws, e.node);
-            let default_items = crate::blocks::get("open_menu")
+            let kind = app
+                .project
+                .workspaces
+                .get(ws)
+                .and_then(|w| w.node(nid))
+                .map(|n| n.kind.clone())
+                .unwrap_or_default();
+            let default_items = crate::blocks::get(&kind)
                 .and_then(|d| d.field("items"))
                 .map(|f| f.default)
                 .unwrap_or("");

@@ -1690,6 +1690,16 @@ mod tests {
             let errors: Vec<_> = out.problems.iter().filter(|x| x.error).collect();
             assert!(errors.is_empty(), "{p:?}: {errors:?}");
             assert!(out.main_java.contains("class AlleBloecke"));
+            // Every block of the test chain must really end up in the code
+            // (only the extra message blocks of events without player may stay unused).
+            let proj = examples::all_blocks_project(p);
+            for w in out.problems.iter().filter(|x| x.msg.contains("nie ausgeführt")) {
+                let kind = proj.workspaces[w.ws]
+                    .node(w.node.unwrap())
+                    .map(|n| n.kind.clone())
+                    .unwrap_or_default();
+                assert_eq!(kind, "send_message", "{p:?}: block {kind} is never run in the self test");
+            }
         }
     }
 
