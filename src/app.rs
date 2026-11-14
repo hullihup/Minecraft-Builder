@@ -1480,6 +1480,7 @@ impl eframe::App for App {
         }
 
         self.shortcuts(&ctx);
+        ui::menu_editor::publish_ids(&self.project);
         self.refresh_generated();
         self.refresh_pack(false);
 

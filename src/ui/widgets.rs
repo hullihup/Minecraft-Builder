@@ -90,6 +90,41 @@ pub fn field_editor(
                     }
                 });
         }
+        FieldKind::MenuItemId => {
+            let menu = get_val(values, "menu", "shop");
+            let ids = crate::ui::menu_editor::ids_of(&menu);
+            let any = t("(jedes Item)", "(any item)");
+            egui::ComboBox::from_id_salt(id_salt)
+                .width(width)
+                .selected_text(if v.is_empty() { any.to_string() } else { v.clone() })
+                .height(300.0)
+                .show_ui(ui, |ui| {
+                    ui.set_min_width(200.0);
+                    ui.selectable_value(&mut v, String::new(), any);
+                    for (id, item) in &ids {
+                        ui.selectable_value(&mut v, id.clone(), id)
+                            .on_hover_text(item);
+                    }
+                    if ids.is_empty() {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} „{menu}“ {}",
+                                t("Im Menü", "The menu"),
+                                t(
+                                    "hat noch keine IDs. Vergib sie im Menü-Editor (Menü öffnen → Menü bearbeiten → Platz anklicken → ID).",
+                                    "has no IDs yet. Set them in the menu editor (Open menu → Edit menu → click a slot → ID).",
+                                )
+                            ))
+                            .size(11.0)
+                            .color(theme::TEXT_WEAK),
+                        );
+                    }
+                    ui.separator();
+                    ui.label(egui::RichText::new(t("Eigene ID eingeben:", "Type an ID:")).size(11.0).color(theme::TEXT_WEAK));
+                    ui.add(egui::TextEdit::singleline(&mut v).desired_width(f32::INFINITY));
+                });
+            v = crate::ui::menu_editor::clean_id(&v);
+        }
         FieldKind::Menu => {
             let n = crate::ui::menu_editor::parse(&v).len();
             ui.label(

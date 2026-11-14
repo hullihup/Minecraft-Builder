@@ -294,6 +294,8 @@ pub enum FieldKind {
     ItemModel,
     /// Chest menu layout, edited in the menu editor window.
     Menu,
+    /// ID of a slot of a menu (picked from the menu editor's IDs, empty = any).
+    MenuItemId,
 }
 
 #[derive(Clone, Debug)]
@@ -2094,9 +2096,10 @@ fn build_all() -> Vec<BlockDef> {
     v.push(
         b("ev_menu_click", C::Events, K::Event,
             ("Klick im Menü", "Menu click"),
-            ("Wird ausgelöst, wenn ein Spieler in einem Menü von „Menü öffnen“ klickt. Items bleiben im Menü, außer du erlaubst das Herausnehmen im Menü-Editor. Nur Paper.",
-             "Fires when a player clicks in a menu from “Open menu”. Items stay in the menu unless you allow taking them in the menu editor. Paper only."))
+            ("Wird ausgelöst, wenn ein Spieler in einem Menü von „Menü öffnen“ klickt. Mit „Item-ID“ reagiert der Block nur auf das Item, dem du im Menü-Editor diese ID gegeben hast. Items bleiben im Menü, außer du erlaubst das Herausnehmen. Nur Paper.",
+             "Fires when a player clicks in a menu from “Open menu”. With “Item ID” the block only reacts to the item you gave this ID in the menu editor. Items stay in the menu unless you allow taking them. Paper only."))
             .f("menu", ("Menü-Name", "Menu name"), F::Text, "shop")
+            .f("click_id", ("Item-ID", "Item ID"), F::MenuItemId, "")
             .o("player", p_player, T::Player)
             .o("slot", ("Platz", "Slot"), T::Number)
             .h(("Nummer des angeklickten Platzes: 0 ist oben links, pro Reihe 9 Plätze.", "Number of the clicked slot: 0 is top left, 9 slots per row."))
@@ -2105,11 +2108,14 @@ fn build_all() -> Vec<BlockDef> {
             .o("model", ("Modell", "Model"), T::Text)
             .h(("Modell-ID des angeklickten Items – bei eigenen Items aus dem Resourcepack z. B. meinpack:zauberstab.", "Model id of the clicked item – for custom items from the resource pack e.g. mypack:wand."))
             .listener("org.bukkit.event.inventory.InventoryClickEvent", false)
-            .paper("if (!(event.getInventory().getHolder() instanceof Util.MenuHolder __mh) || !__mh.id.equals(${s:menu})) return;\n    if (event.getClickedInventory() != event.getView().getTopInventory()) return;")
+            .paper("if (!(event.getInventory().getHolder() instanceof Util.MenuHolder __mh) || !__mh.id.equals(${s:menu})) return;\n    if (event.getClickedInventory() != event.getView().getTopInventory()) return;\n    if (!${s:click_id}.isEmpty() && !Util.menuId(event.getCurrentItem()).equals(${s:click_id})) return;")
             .pout("player", "(org.bukkit.entity.Player) event.getWhoClicked()")
             .pout("slot", "event.getSlot()")
             .pout("item", "Util.itemId(event.getCurrentItem())")
-            .pout("model", "Util.modelOf(event.getCurrentItem())"),
+            .o("id", ("ID", "ID"), T::Text)
+            .h(("Die ID des angeklickten Platzes aus dem Menü-Editor (leer, wenn er keine hat).", "The ID of the clicked slot from the menu editor (empty if it has none)."))
+            .pout("model", "Util.modelOf(event.getCurrentItem())")
+            .pout("id", "Util.menuId(event.getCurrentItem())"),
     );
     v.push(
         b(

@@ -22,6 +22,8 @@ pub struct MenuItem {
     pub model: String,
     /// Players may take the item out of the menu.
     pub take: bool,
+    /// Own name of the slot, e.g. `buy_diamond`; "Menu click" can react to it.
+    pub id: String,
 }
 
 /// Reads the block's "items" value (new tab format and the old "slot: item | name | lore").
@@ -44,6 +46,7 @@ pub fn parse(text: &str) -> Vec<MenuItem> {
             it.amount = p.get(4).and_then(|s| s.trim().parse().ok()).unwrap_or(1);
             it.model = p.get(5).unwrap_or(&"").trim().to_string();
             it.take = p.get(6).map(|f| f.contains("take")).unwrap_or(false);
+            it.id = p.get(7).map(|x| clean_id(x)).unwrap_or_default();
         } else {
             let Some((slot, rest)) = line.split_once(':') else {
                 continue;
@@ -75,18 +78,68 @@ pub fn serialize(items: &[MenuItem]) -> String {
     v.iter()
         .map(|i| {
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 i.slot,
                 clean(&i.item),
                 clean(&i.name),
                 clean(&i.lore),
                 i.amount.clamp(1, 99),
                 clean(&i.model),
-                if i.take { "take" } else { "" }
+                if i.take { "take" } else { "" },
+                clean_id(&i.id)
             )
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Menu ids: lowercase letters, digits, `_` and `-`.
+pub fn clean_id(s: &str) -> String {
+    s.trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| if c == ' ' { '_' } else { c })
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .collect()
+}
+
+/// IDs of the menu slots of the project, for the picker on "Menu click": (menu name, id, item).
+static MENU_IDS: std::sync::RwLock<Vec<(String, String, String)>> = std::sync::RwLock::new(Vec::new());
+
+/// Collects the slot IDs of all "Open menu" blocks (called every frame, cheap).
+pub fn publish_ids(project: &crate::model::Project) {
+    let mut out = vec![];
+    for ws in &project.workspaces {
+        for n in &ws.nodes {
+            let Some(def) = crate::blocks::get(&n.kind) else { continue };
+            let Some(f) = def.fields.iter().find(|f| matches!(f.kind, crate::blocks::FieldKind::Menu)) else {
+                continue;
+            };
+            let menu = n.values.get("menu").cloned().unwrap_or_else(|| "shop".into());
+            let text = n.values.get(f.id).map(|s| s.as_str()).unwrap_or(f.default);
+            for it in parse(text) {
+                if !it.id.is_empty() && !out.iter().any(|(m, i, _): &(String, String, String)| *m == menu && *i == it.id) {
+                    out.push((menu.clone(), it.id.clone(), it.item.clone()));
+                }
+            }
+        }
+    }
+    if let Ok(mut w) = MENU_IDS.write() {
+        *w = out;
+    }
+}
+
+/// Slot IDs of one menu: (id, item).
+pub fn ids_of(menu: &str) -> Vec<(String, String)> {
+    MENU_IDS
+        .read()
+        .map(|v| {
+            v.iter()
+                .filter(|(m, _, _)| m == menu)
+                .map(|(_, i, it)| (i.clone(), it.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub fn rows_of(values: &std::collections::BTreeMap<String, String>) -> usize {
@@ -379,6 +432,13 @@ fn mc_tooltip(ui: &mut Ui, it: &MenuItem) {
                 .size(11.0)
                 .color(Color32::from_rgb(0x55, 0x55, 0x55)),
             );
+            if !it.id.is_empty() {
+                ui.label(
+                    RichText::new(format!("ID: {}", it.id))
+                        .size(11.0)
+                        .color(Color32::from_rgb(0x55, 0xFF, 0xFF)),
+                );
+            }
             if it.take {
                 ui.label(
                     RichText::new(t("Kann herausgenommen werden", "Can be taken out"))
@@ -759,6 +819,37 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                                 open_picker = Some(slot);
                             }
                             let it = &mut list[idx];
+                            field_label(ui, t("ID (für „Klick im Menü“)", "ID (for “Menu click”)"));
+                            ui.horizontal(|ui| {
+                                let mut id = it.id.clone();
+                                let suggestion = clean_id(&items::strip(&it.item).replace(':', "_"));
+                                if ui
+                                    .add(
+                                        egui::TextEdit::singleline(&mut id)
+                                            .hint_text(suggestion.as_str())
+                                            .desired_width(ui.available_width() - 90.0),
+                                    )
+                                    .changed()
+                                {
+                                    it.id = clean_id(&id);
+                                }
+                                if it.id.is_empty()
+                                    && ui
+                                        .button(t("Vorschlag", "Suggest"))
+                                        .on_hover_text(suggestion.as_str())
+                                        .clicked()
+                                {
+                                    it.id = suggestion.clone();
+                                }
+                            });
+                            ui.label(
+                                RichText::new(t(
+                                    "Im Block „Klick im Menü“ kannst du diese ID auswählen – dann läuft er nur, wenn genau dieses Item angeklickt wird.",
+                                    "In the “Menu click” block you can pick this ID – then it only runs when exactly this item is clicked.",
+                                ))
+                                .size(11.0)
+                                .color(theme::TEXT_WEAK),
+                            );
                             field_label(ui, t("Name (leer = normaler Item-Name)", "Name (empty = normal item name)"));
                             ui.add(
                                 egui::TextEdit::singleline(&mut it.name)
@@ -1288,7 +1379,9 @@ mod tests {
         list[1].take = true;
         list[1].amount = 16;
         list[1].model = "magie:stab".into();
+        list[1].id = "Kauf Smaragd".into();
         let text = serialize(&list);
+        list[1].id = "kauf_smaragd".into();
         assert_eq!(parse(&text), list);
         assert!(text.contains("\t16\tmagie:stab\ttake"));
     }

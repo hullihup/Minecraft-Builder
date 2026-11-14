@@ -356,34 +356,27 @@ pub fn new_project(name: &str, platform: Platform, starter: Starter) -> Project 
                     ("menu", "shop"),
                     ("title", "&8Shop"),
                     ("rows", "3"),
-                    ("items", "11\tminecraft:diamond\t&bDiamant kaufen\t&7Kostet &65 Goldbarren\t1\t\t\n13\tminecraft:gold_ingot\t&6Dein Gold\t&7Damit bezahlst du\t5\t\t\n15\tminecraft:barrier\t&cSchließen\t\t1\t\t"),
+                    ("items", "11\tminecraft:diamond\t&bDiamant kaufen\t&7Kostet &65 Goldbarren\t1\t\t\tdiamant_kaufen\n13\tminecraft:gold_ingot\t&6Dein Gold\t&7Damit bezahlst du\t5\t\t\t\n15\tminecraft:barrier\t&cSchließen\t\t1\t\t\tschliessen"),
                 ],
             );
             b.flow(cmd, menu);
-            let click = b.node("ev_menu_click", 32.0, 480.0, &[("menu", "shop")]);
-            let is_buy = b.node("compare", 32.0, 768.0, &[("b", "11"), ("op", "==")]);
-            let iff = b.node("if", 352.0, 480.0, &[]);
-            let take = b.node("take_items", 672.0, 480.0, &[("item", "minecraft:gold_ingot"), ("amount", "5")]);
-            let paid = b.node("if", 992.0, 480.0, &[]);
-            let give = b.node("give_item", 1312.0, 480.0, &[("item", "minecraft:diamond")]);
-            let ok = b.node("send_message", 1632.0, 480.0, &[("text", "&aGekauft: &b1 Diamant")]);
-            let no = b.node("send_message", 1312.0, 736.0, &[("text", "&cDu brauchst 5 Goldbarren.")]);
-            let is_close = b.node("compare", 352.0, 768.0, &[("b", "15"), ("op", "==")]);
-            let iff2 = b.node("if", 672.0, 800.0, &[]);
-            let close = b.node("close_menu", 992.0, 800.0, &[]);
-            b.link(click, "slot", is_buy, "a");
-            b.link(is_buy, "res", iff, "cond");
-            b.flow(click, iff);
-            b.link(iff, "then", take, "in");
+            // Click on the diamond: pay 5 gold, get a diamond.
+            let buy = b.node("ev_menu_click", 32.0, 480.0, &[("menu", "shop"), ("click_id", "diamant_kaufen")]);
+            let take = b.node("take_items", 352.0, 480.0, &[("item", "minecraft:gold_ingot"), ("amount", "5")]);
+            let paid = b.node("if", 672.0, 480.0, &[]);
+            let give = b.node("give_item", 992.0, 480.0, &[("item", "minecraft:diamond")]);
+            let ok = b.node("send_message", 1312.0, 480.0, &[("text", "&aGekauft: &b1 Diamant")]);
+            let no = b.node("send_message", 992.0, 736.0, &[("text", "&cDu brauchst 5 Goldbarren.")]);
+            b.flow(buy, take);
             b.flow(take, paid);
             b.link(take, "ok", paid, "cond");
             b.link(paid, "then", give, "in");
             b.flow(give, ok);
             b.link(paid, "else", no, "in");
-            b.link(click, "slot", is_close, "a");
-            b.link(is_close, "res", iff2, "cond");
-            b.link(iff, "else", iff2, "in");
-            b.link(iff2, "then", close, "in");
+            // Click on the barrier: close.
+            let shut = b.node("ev_menu_click", 32.0, 960.0, &[("menu", "shop"), ("click_id", "schliessen")]);
+            let close = b.node("close_menu", 352.0, 960.0, &[]);
+            b.flow(shut, close);
         }
         Starter::Settings => {
             let s = b.node("ev_start", 32.0, 32.0, &[]);

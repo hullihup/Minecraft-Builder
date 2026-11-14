@@ -315,10 +315,29 @@ __COMMON__
             if (e == null) continue;
             int slot = (int) num(e[0]);
             if (slot < 0 || slot >= size) continue;
-            inv.setItem(slot, customItem(e[1], num(e[4]), e[5], e[2], e[3]));
+            ItemStack is = customItem(e[1], num(e[4]), e[5], e[2], e[3]);
+            if (!e[7].isEmpty()) {
+                ItemMeta meta = is.getItemMeta();
+                if (meta != null) {
+                    meta.getPersistentDataContainer().set(menuKey(), org.bukkit.persistence.PersistentDataType.STRING, e[7]);
+                    is.setItemMeta(meta);
+                }
+            }
+            inv.setItem(slot, is);
             if (e[6].contains("take")) holder.takeable.add(slot);
         }
         p.openInventory(inv);
+    }
+
+    static NamespacedKey menuKey() {
+        return new NamespacedKey(__MAIN__.INSTANCE, "menu_id");
+    }
+
+    /** The ID a menu slot got in the menu editor ("" if none). */
+    public static String menuId(ItemStack is) {
+        if (is == null || !is.hasItemMeta()) return "";
+        String v = is.getItemMeta().getPersistentDataContainer().get(menuKey(), org.bukkit.persistence.PersistentDataType.STRING);
+        return v == null ? "" : v;
     }
 
     /** Keeps items inside menus unless their slot is marked as takeable. */

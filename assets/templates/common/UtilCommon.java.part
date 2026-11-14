@@ -109,11 +109,11 @@
 
     /**
      * Parses one menu line. New format (written by the menu editor), separated by tabs:
-     * slot, item, name, lore, amount, model, flags. Old format: "slot: item | name | lore".
-     * Returns null if invalid, otherwise always 7 entries.
+     * slot, item, name, lore, amount, model, flags, id. Old format: "slot: item | name | lore".
+     * Returns null if invalid, otherwise always 8 entries.
      */
     public static String[] menuLine(String line) {
-        String[] out = { "", "", "", "", "1", "", "" };
+        String[] out = { "", "", "", "", "1", "", "", "" };
         if (line.indexOf('\t') >= 0) {
             String[] parts = line.split("\t", -1);
             for (int i = 0; i < parts.length && i < out.length; i++) {

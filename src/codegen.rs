@@ -379,7 +379,11 @@ impl<'a> Gen<'a> {
                     f.default.to_string()
                 }
             }
-            FieldKind::Text | FieldKind::Multiline | FieldKind::ItemModel | FieldKind::Menu => {
+            FieldKind::Text
+            | FieldKind::Multiline
+            | FieldKind::ItemModel
+            | FieldKind::Menu
+            | FieldKind::MenuItemId => {
                 v.to_string()
             }
         }

@@ -293,10 +293,17 @@ impl Renderer {
     pub fn render(&mut self, id: &str) -> Option<egui::ColorImage> {
         let (ns, name) = split(id);
         let def_path = format!("assets/{ns}/items/{name}.json");
-        let picked = self
+        let def = self
             .read(&def_path)
-            .and_then(|d| serde_json::from_slice::<Value>(&d).ok())
-            .and_then(|v| pick_model(&v["model"], 0));
+            .and_then(|d| serde_json::from_slice::<Value>(&d).ok());
+        if let Some(d) = &def {
+            if d["model"]["type"].as_str().map(|t| t.ends_with("composite")) == Some(true) {
+                if let Some(img) = self.composite(&d["model"]) {
+                    return Some(img);
+                }
+            }
+        }
+        let picked = def.and_then(|v| pick_model(&v["model"], 0));
         let (model, tints, special): (String, Vec<Option<[u8; 3]>>, Option<Value>) = match picked {
             Some(p) => p,
             None => {
@@ -449,18 +456,32 @@ impl Renderer {
 
     /// 3D view like the inventory: seen from above, front (north) on the left.
     fn cube(&mut self, r: &Resolved, elements: &[Value], tints: &[Option<[u8; 3]>]) -> egui::ColorImage {
+        let part = Part {
+            textures: r.textures.clone(),
+            elements: elements.to_vec(),
+            tints: tints.to_vec(),
+            offset: [0.0; 3],
+        };
+        self.cube_parts(std::slice::from_ref(&part))
+    }
+
+    /// Several models drawn together (e.g. bed head + foot), each moved by its offset.
+    fn cube_parts(&mut self, parts: &[Part]) -> egui::ColorImage {
         let n = SIZE;
         let mut color = vec![[0u8; 4]; n * n];
         let mut depth = vec![f32::NEG_INFINITY; n * n];
         let cam = Camera::new();
-        // Fit the full block (0..16 on every axis) into the picture.
+        // Fit the full blocks (0..16 on every axis, per part) into the picture.
         let (mut min, mut max) = ([f32::MAX; 2], [f32::MIN; 2]);
-        for x in [0.0, 16.0] {
-            for y in [0.0, 16.0] {
-                for z in [0.0, 16.0] {
-                    let p = cam.project([x, y, z]);
-                    min = [min[0].min(p[0]), min[1].min(p[1])];
-                    max = [max[0].max(p[0]), max[1].max(p[1])];
+        for part in parts {
+            let o = part.offset;
+            for x in [0.0, 16.0] {
+                for y in [0.0, 16.0] {
+                    for z in [0.0, 16.0] {
+                        let p = cam.project([x + o[0], y + o[1], z + o[2]]);
+                        min = [min[0].min(p[0]), min[1].min(p[1])];
+                        max = [max[0].max(p[0]), max[1].max(p[1])];
+                    }
                 }
             }
         }
@@ -471,7 +492,14 @@ impl Renderer {
         ];
         let to_px = |p: [f32; 2]| [p[0] * scale + off[0], p[1] * scale + off[1]];
 
-        for el in elements {
+        for part in parts {
+        let r = &Resolved {
+            textures: part.textures.clone(),
+            ..Default::default()
+        };
+        let tints: &[Option<[u8; 3]>] = &part.tints;
+        let offset = part.offset;
+        for el in &part.elements {
             let (Some(from), Some(to)) = (vec3(&el["from"]), vec3(&el["to"])) else {
                 continue;
             };
@@ -485,9 +513,10 @@ impl Renderer {
                     continue;
                 };
                 // Rotate the face with its element.
-                let po = rot.apply(o);
-                let pu = sub(rot.apply(add(o, u)), po);
-                let pv = sub(rot.apply(add(o, v)), po);
+                let po0 = rot.apply(o);
+                let pu = sub(rot.apply(add(o, u)), po0);
+                let pv = sub(rot.apply(add(o, v)), po0);
+                let po = add(po0, offset);
                 let normal = cross(pv, pu);
                 // Only faces turned towards the camera.
                 if dot(normal, cam.to_camera) <= 0.0 {
@@ -601,9 +630,47 @@ impl Renderer {
                 }
             }
         }
+        }
         let flat: Vec<u8> = color.into_iter().flatten().collect();
         egui::ColorImage::from_rgba_unmultiplied([n, n], &flat)
     }
+
+    /// "composite" items made of several block models (beds): all parts as one picture.
+    fn composite(&mut self, node: &Value) -> Option<egui::ColorImage> {
+        let models = node["models"].as_array()?;
+        if models.len() < 2 {
+            return None;
+        }
+        let mut parts = vec![];
+        for m in models {
+            if m["type"].as_str()?.trim_start_matches("minecraft:") != "model" {
+                return None;
+            }
+            let r = self.resolve(m["model"].as_str()?);
+            let elements = r.elements.clone().filter(|e| !e.is_empty() && !r.generated)?;
+            let tints = m["tints"]
+                .as_array()
+                .map(|a| a.iter().map(tint_color).collect())
+                .unwrap_or_default();
+            // Translation is in blocks.
+            let t = vec3(&m["transformation"]["translation"]).unwrap_or([0.0; 3]);
+            parts.push(Part {
+                textures: r.textures,
+                elements,
+                tints,
+                offset: [t[0] * 16.0, t[1] * 16.0, t[2] * 16.0],
+            });
+        }
+        Some(self.cube_parts(&parts))
+    }
+}
+
+/// One model of a picture made of several models.
+struct Part {
+    textures: HashMap<String, String>,
+    elements: Vec<Value>,
+    tints: Vec<Option<[u8; 3]>>,
+    offset: V3,
 }
 
 /// Flat item: layers on top of each other, scaled up without smoothing.
