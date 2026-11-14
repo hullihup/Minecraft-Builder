@@ -95,6 +95,8 @@ enum NodeEvent {
     Disconnect(NodeId),
     /// Open the menu editor for an "Open menu" block.
     OpenMenu(NodeId),
+    /// Open the recipe editor.
+    OpenRecipe(NodeId),
     /// Open the commands window for a command block.
     OpenCommand(NodeId),
     /// Open the item search for a text input of a block.
@@ -595,6 +597,35 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             .collect();
         menu_prev.insert(nid, (rows, v));
     }
+    // Recipe blocks show their grid and result: (kind, [9 textures/ids], result).
+    type Cell = (String, Option<egui::TextureId>);
+    let recipe_raw: Vec<(NodeId, String, crate::recipe::Recipe)> = app.project.workspaces[ws_idx]
+        .nodes
+        .iter()
+        .filter(|n| n.kind == "recipe")
+        .map(|n| {
+            let d = crate::recipe::from_node(n);
+            (n.id, d.rtype, d.recipe)
+        })
+        .collect();
+    let mut recipe_prev: HashMap<NodeId, (String, Vec<Cell>, Cell, u32)> = HashMap::new();
+    for (nid, rtype, r) in recipe_raw {
+        let cells: Vec<Cell> = r
+            .grid
+            .iter()
+            .map(|g| {
+                let tex = if g.is_empty() { None } else { app.item_texture(&ctx, g, "") };
+                (g.clone(), tex)
+            })
+            .collect();
+        let res_tex = if r.result.is_empty() {
+            None
+        } else {
+            app.item_texture(&ctx, &r.result, &r.model)
+        };
+        let res_id = if r.model.is_empty() { r.result.clone() } else { r.model.clone() };
+        recipe_prev.insert(nid, (rtype, cells, (res_id, res_tex), r.amount));
+    }
     let mut new_sizes = HashMap::new();
     for idx in order {
         let node = &mut app.project.workspaces[ws_idx].nodes[idx];
@@ -885,6 +916,74 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         // Fields
         for f in def.fields.iter().filter(|f| !f.advanced) {
             let multiline = matches!(f.kind, blocks::FieldKind::Multiline);
+            if matches!(f.kind, blocks::FieldKind::Recipe) {
+                let (rtype, cells, result, amount) = recipe_prev.get(&nid).cloned().unwrap_or_default();
+                let single = crate::recipe::single_input(&rtype);
+                let cell = 30.0_f32;
+                egui::Frame::new()
+                    .inner_margin(egui::Margin::symmetric(PAD_X as i8, 2))
+                    .show(&mut nui, |ui| {
+                        let (r, resp) = ui.allocate_exact_size(vec2(inner_w, cell * 3.0 + 8.0), Sense::click());
+                        let p = ui.painter();
+                        p.rect_filled(r, 4.0, Color32::from_rgb(0xC6, 0xC6, 0xC6));
+                        let g0 = r.min + vec2(8.0, 4.0);
+                        let slot = |p: &egui::Painter, sr: Rect| {
+                            p.rect_filled(sr.shrink(1.0), 0.0, Color32::from_rgb(0x8B, 0x8B, 0x8B));
+                            p.line_segment([sr.left_top(), sr.right_top()], Stroke::new(1.0, Color32::from_rgb(0x37, 0x37, 0x37)));
+                            p.line_segment([sr.left_top(), sr.left_bottom()], Stroke::new(1.0, Color32::from_rgb(0x37, 0x37, 0x37)));
+                        };
+                        let draw = |p: &egui::Painter, sr: Rect, c: &(String, Option<egui::TextureId>)| {
+                            if c.0.is_empty() {
+                                return;
+                            }
+                            match c.1 {
+                                Some(t) => {
+                                    p.image(t, sr.shrink(3.0), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                                }
+                                None => crate::items::paint_placeholder(p, sr.shrink(4.0), &c.0),
+                            }
+                        };
+                        for i in 0..9 {
+                            if single && i != crate::recipe::CENTER {
+                                continue;
+                            }
+                            let sr = Rect::from_min_size(g0 + vec2((i % 3) as f32 * cell, (i / 3) as f32 * cell), vec2(cell, cell));
+                            slot(p, sr);
+                            if let Some(c) = cells.get(i) {
+                                draw(p, sr, c);
+                            }
+                        }
+                        let rr = Rect::from_center_size(pos2(r.right() - 34.0, r.center().y), vec2(cell + 8.0, cell + 8.0));
+                        let ax = g0.x + cell * 3.0 + 10.0;
+                        let col = Color32::from_rgb(0x8B, 0x8B, 0x8B);
+                        p.rect_filled(Rect::from_min_max(pos2(ax, r.center().y - 4.0), pos2(rr.left() - 18.0, r.center().y + 4.0)), 0.0, col);
+                        p.add(Shape::convex_polygon(
+                            vec![pos2(rr.left() - 20.0, r.center().y - 10.0), pos2(rr.left() - 6.0, r.center().y), pos2(rr.left() - 20.0, r.center().y + 10.0)],
+                            col,
+                            Stroke::NONE,
+                        ));
+                        slot(p, rr);
+                        draw(p, rr, &result);
+                        if amount > 1 {
+                            p.text(rr.right_bottom() - vec2(3.0, 2.0), egui::Align2::RIGHT_BOTTOM, amount.to_string(), FontId::monospace(10.0), Color32::WHITE);
+                        }
+                        if resp.hovered() {
+                            p.rect_stroke(r, 4.0, Stroke::new(1.5, theme::ACCENT), StrokeKind::Outside);
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        if resp.on_hover_text(t("Klicken, um das Rezept zu bearbeiten", "Click to edit the recipe")).clicked() {
+                            events.push(NodeEvent::OpenRecipe(nid));
+                        }
+                    });
+                nui.add_space(4.0);
+                row(&mut nui, |ui| {
+                    if wide_button(ui, crate::ui::icons::Icon::Grid, t("Rezept bearbeiten", "Edit recipe"), inner_w).clicked() {
+                        events.push(NodeEvent::OpenRecipe(nid));
+                    }
+                });
+                nui.add_space(2.0);
+                continue;
+            }
             if matches!(f.kind, blocks::FieldKind::Menu) {
                 // Mini chest + button that opens the menu editor.
                 let (rows, items) = menu_prev.get(&nid).cloned().unwrap_or((3, vec![]));
@@ -921,6 +1020,12 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                                 vec2(cell, cell),
                             )
                             .shrink(3.5);
+                            if item == "minecraft:air" {
+                                let st = Stroke::new(2.0, Color32::from_rgb(0xD0, 0x30, 0x30));
+                                p.line_segment([sr.left_top(), sr.right_bottom()], st);
+                                p.line_segment([sr.right_top(), sr.left_bottom()], st);
+                                continue;
+                            }
                             match tex {
                                 Some(t) => {
                                     p.image(
@@ -1662,6 +1767,11 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 app.selection.clear();
                 app.selection.insert(id);
                 app.menu_edit = Some(crate::ui::menu_editor::MenuEdit::new(ws_idx, id));
+            }
+            NodeEvent::OpenRecipe(id) => {
+                app.selection.clear();
+                app.selection.insert(id);
+                crate::ui::recipe_editor::open(app, ws_idx, id);
             }
             NodeEvent::OpenCommand(id) => {
                 let cmd = app.project.workspaces[ws_idx]

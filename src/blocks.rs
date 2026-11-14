@@ -143,9 +143,10 @@ pub enum Cat {
     Server,
     Location,
     Files,
+    Recipes,
 }
 
-pub const CATEGORIES: [Cat; 13] = [
+pub const CATEGORIES: [Cat; 14] = [
     Cat::Events,
     Cat::Messages,
     Cat::Player,
@@ -157,6 +158,7 @@ pub const CATEGORIES: [Cat; 13] = [
     Cat::Text,
     Cat::Data,
     Cat::Files,
+    Cat::Recipes,
     Cat::Resources,
     Cat::Server,
 ];
@@ -177,6 +179,7 @@ impl Cat {
             Cat::Server => ("Server", "Server"),
             Cat::Location => ("Positionen", "Locations"),
             Cat::Files => ("Dateien & Einstellungen", "Files & settings"),
+            Cat::Recipes => ("Rezepte", "Recipes"),
         }
     }
     pub fn color(self) -> Color32 {
@@ -194,6 +197,7 @@ impl Cat {
             Cat::Server => Color32::from_rgb(0x9A, 0xA4, 0xB2),
             Cat::Location => Color32::from_rgb(0xFF, 0xC8, 0x4D),
             Cat::Files => Color32::from_rgb(0xFF, 0x9A, 0x3D),
+            Cat::Recipes => Color32::from_rgb(0xD9, 0xA0, 0x66),
         }
     }
     pub fn icon_kind(self) -> crate::ui::icons::Icon {
@@ -212,6 +216,7 @@ impl Cat {
             Cat::Server => I::Server,
             Cat::Location => I::Pin,
             Cat::Files => I::Folder,
+            Cat::Recipes => I::Grid,
         }
     }
     #[allow(dead_code)]
@@ -230,6 +235,7 @@ impl Cat {
             Cat::Server => "🖧",
             Cat::Location => "📍",
             Cat::Files => "📁",
+            Cat::Recipes => "⚒",
         }
     }
 }
@@ -294,6 +300,8 @@ pub enum FieldKind {
     ItemModel,
     /// Chest menu layout, edited in the menu editor window.
     Menu,
+    /// Crafting recipe (grid + result), edited in the recipe editor.
+    Recipe,
     /// ID of a slot of a menu (picked from the menu editor's IDs, empty = any).
     MenuItemId,
 }
@@ -317,6 +325,8 @@ pub enum Special {
     Command,
     /// Runs repeatedly every N seconds.
     Timer,
+    /// Adds a crafting recipe when the plugin / mod starts (no flow needed).
+    Recipe,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -605,6 +615,11 @@ const WEATHER: &[(&str, L)] = &[
 const MENU_SCOPES: &[(&str, L)] = &[
     ("player", ("Diesen Spieler", "This player")),
     ("global", ("Alle Spieler", "All players")),
+];
+
+const MENU_MODES: &[(&str, L)] = &[
+    ("all", ("Ganzes Menü", "Whole menu")),
+    ("slots", ("Nur diese Plätze", "Only these slots")),
 ];
 
 const EQUIP_SLOTS: &[(&str, L)] = &[
@@ -2125,9 +2140,10 @@ fn build_all() -> Vec<BlockDef> {
     v.push(
         b("replace_menu", C::Player, K::Action,
             ("Menü ersetzen", "Replace menu"),
-            ("Tauscht ein Menü gegen ein anderes aus – für einen Spieler oder für alle. Wer danach ein Menü mit diesem Menü-Namen öffnet, sieht das neue Menü (bleibt nach Neustart erhalten). Ist es gerade offen, wird es sofort ausgetauscht. Mit „Menü zurücksetzen“ kommt das alte zurück. Nur Paper.",
-             "Swaps a menu for another one – for one player or for everyone. Whoever opens a menu with this menu name afterwards sees the new menu (survives restarts). If it is open right now, it is swapped at once. “Reset menu” brings the old one back. Paper only."))
+            ("Tauscht ein Menü aus – für einen Spieler oder für alle. „Ganzes Menü“ ersetzt alles, „Nur diese Plätze“ nur die Plätze, die du im Editor belegst (der Rest bleibt wie im Original). Wer danach das Menü öffnet, sieht die neue Version (bleibt nach Neustart erhalten); ist es gerade offen, wird es sofort ausgetauscht. „Menü zurücksetzen“ holt das Original zurück. Nur Paper.",
+             "Swaps a menu – for one player or for everyone. “Whole menu” replaces everything, “Only these slots” only the slots you fill in the editor (the rest stays as in the original). Whoever opens the menu afterwards sees the new version (survives restarts); if it is open right now, it is swapped at once. “Reset menu” brings the original back. Paper only."))
             .f("scope", ("Für", "For"), F::Choice(MENU_SCOPES), "player")
+            .f("mode", ("Ersetzen", "Replace"), F::Choice(MENU_MODES), "all")
             .f("menu", ("Menü-Name", "Menu name"), F::Text, "shop")
             .f("items", ("Items", "Items"), F::Menu, "13\tminecraft:emerald\t&aNeues Menü\t&7Nur für dich\t1\t\t\t")
             .i("player", p_player, T::Player, "")
@@ -2136,7 +2152,7 @@ fn build_all() -> Vec<BlockDef> {
             .h(("Überschrift des neuen Menüs (mit &-Farbcodes).", "Heading of the new menu (with & color codes)."))
             .i("rows", ("Reihen", "Rows"), T::Number, "3")
             .h(("Wie viele Reihen das neue Menü hat (1–6).", "How many rows the new menu has (1–6)."))
-            .paper("Util.replaceMenu(${in:player}, \"${f:scope}\".equals(\"global\"), ${s:menu}, ${in:title}, ${in:rows}, ${s:items});"),
+            .paper("Util.replaceMenu(${in:player}, \"${f:scope}\".equals(\"global\"), ${s:menu}, ${in:title}, ${in:rows}, ${s:items}, \"${f:mode}\".equals(\"slots\"));"),
     );
     v.push(
         b("reset_menu", C::Player, K::Action,
@@ -2295,6 +2311,22 @@ fn build_all() -> Vec<BlockDef> {
             .i("loc", ("Position", "Location"), T::Location, "")
             .o("res", ("Position", "Location"), T::Location)
             .pout("res", "Util.surface(${in:loc})"),
+    );
+
+    // ---------------------------------------------------------------- Recipes
+    v.push(
+        b("recipe", C::Recipes, K::Value,
+            ("Rezept", "Recipe"),
+            ("Ein eigenes Rezept für Werkbank, Ofen, Räucherofen, Schmelzofen, Lagerfeuer oder Steinsäge. Mit „Rezept bearbeiten“ legst du Zutaten und Ergebnis fest – auch eigene Items aus deinem Resourcepack. Braucht keinen Ablauf: das Rezept gibt es, sobald der Server läuft.",
+             "An own recipe for crafting table, furnace, smoker, blast furnace, campfire or stonecutter. “Edit recipe” sets ingredients and result – custom items from your resource pack too. Needs no flow: the recipe exists as soon as the server runs."))
+            .special(Special::Recipe)
+            .f("rtype", ("Art", "Kind"), F::Choice(crate::recipe::TYPES), "shaped")
+            .f("rid", ("Rezept-Name", "Recipe name"), F::Text, "mein_rezept")
+            .f("recipe", ("Rezept", "Recipe"), F::Recipe, crate::recipe::DEFAULT)
+            .fa("xp", ("Erfahrung", "Experience"), F::Number, "0.1")
+            .fa("seconds", ("Brennzeit (Sek.)", "Cooking time (s)"), F::Number, "10")
+            .paper_empty()
+            .fabric_empty(),
     );
 
     // ------------------------------------------------------ Files & settings

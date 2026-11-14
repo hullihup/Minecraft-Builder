@@ -314,12 +314,16 @@ __COMMON__
         holder.baseTitle = title;
         holder.baseRows = rows;
         holder.baseItems = items;
-        // "Replace menu": this player (or everyone) gets another layout.
-        String[] o = menuOverride(p, id);
-        if (o != null) {
-            title = o[0];
-            rows = num(o[1]);
-            items = o[2];
+        // "Replace menu": first for everyone, then for this player.
+        for (String[] o : new String[][] { menuOverride(menuStoreKey(p, true, id)), menuOverride(menuStoreKey(p, false, id)) }) {
+            if (o == null) continue;
+            if (o.length > 3 && o[3].equals("slots")) {
+                items = mergeMenuItems(items, o[2]);
+            } else {
+                title = o[0];
+                rows = num(o[1]);
+                items = o[2];
+            }
         }
         int size = 9 * Math.max(1, Math.min(6, (int) rows));
         Inventory inv = Bukkit.createInventory(holder, size, color(title));
@@ -328,7 +332,7 @@ __COMMON__
             String[] e = menuLine(line);
             if (e == null) continue;
             int slot = (int) num(e[0]);
-            if (slot < 0 || slot >= size) continue;
+            if (slot < 0 || slot >= size || e[1].equals("minecraft:air")) continue;
             ItemStack is = customItem(e[1], num(e[4]), e[5], e[2], e[3]);
             if (!e[7].isEmpty()) {
                 ItemMeta meta = is.getItemMeta();
@@ -354,24 +358,130 @@ __COMMON__
         return v == null ? "" : v;
     }
 
+    // ----- recipes ----------------------------------------------------------------
+
+    static Material recipeMat(String id) {
+        if (id == null || id.isBlank()) return null;
+        Material m = Material.matchMaterial(id.trim());
+        return m == null || m.isAir() || !m.isItem() ? null : m;
+    }
+
+    /** Adds a recipe from the "Recipe" block. grid: 9 slots (shaped/shapeless) or the one input. */
+    public static void addRecipe(String key, String type, String[] grid, ItemStack result, double xp, double seconds) {
+        NamespacedKey k = new NamespacedKey(__MAIN__.INSTANCE, key);
+        Bukkit.removeRecipe(k);
+        int ticks = Math.max(1, (int) Math.round(seconds * 20));
+        Material first = null;
+        for (String g : grid) {
+            Material m = recipeMat(g);
+            if (m != null) {
+                first = m;
+                break;
+            }
+        }
+        if (first == null) {
+            __MAIN__.INSTANCE.getLogger().warning("Recipe " + key + ": no valid ingredient");
+            return;
+        }
+        org.bukkit.inventory.Recipe r;
+        switch (type) {
+            case "shapeless" -> {
+                org.bukkit.inventory.ShapelessRecipe s = new org.bukkit.inventory.ShapelessRecipe(k, result);
+                for (String g : grid) {
+                    Material m = recipeMat(g);
+                    if (m != null) s.addIngredient(m);
+                }
+                r = s;
+            }
+            case "smelting" -> r = new org.bukkit.inventory.FurnaceRecipe(k, result, first, (float) xp, ticks);
+            case "smoking" -> r = new org.bukkit.inventory.SmokingRecipe(k, result, first, (float) xp, ticks);
+            case "blasting" -> r = new org.bukkit.inventory.BlastingRecipe(k, result, first, (float) xp, ticks);
+            case "campfire" -> r = new org.bukkit.inventory.CampfireRecipe(k, result, first, (float) xp, ticks);
+            case "stonecutting" -> r = new org.bukkit.inventory.StonecuttingRecipe(k, result, first);
+            default -> {
+                // Shaped: only the used rows/columns, one letter per ingredient.
+                int r0 = 3, r1 = -1, c0 = 3, c1 = -1;
+                for (int i = 0; i < 9 && i < grid.length; i++) {
+                    if (recipeMat(grid[i]) == null) continue;
+                    r0 = Math.min(r0, i / 3);
+                    r1 = Math.max(r1, i / 3);
+                    c0 = Math.min(c0, i % 3);
+                    c1 = Math.max(c1, i % 3);
+                }
+                java.util.Map<Material, Character> keys = new java.util.LinkedHashMap<>();
+                String[] shape = new String[r1 - r0 + 1];
+                for (int row = r0; row <= r1; row++) {
+                    StringBuilder sb = new StringBuilder();
+                    for (int col = c0; col <= c1; col++) {
+                        Material m = row * 3 + col < grid.length ? recipeMat(grid[row * 3 + col]) : null;
+                        if (m == null) {
+                            sb.append(' ');
+                        } else {
+                            Character ch = keys.get(m);
+                            if (ch == null) {
+                                ch = (char) ('a' + keys.size());
+                                keys.put(m, ch);
+                            }
+                            sb.append(ch);
+                        }
+                    }
+                    shape[row - r0] = sb.toString();
+                }
+                org.bukkit.inventory.ShapedRecipe s = new org.bukkit.inventory.ShapedRecipe(k, result);
+                s.shape(shape);
+                for (java.util.Map.Entry<Material, Character> e : keys.entrySet()) s.setIngredient(e.getValue(), e.getKey());
+                r = s;
+            }
+        }
+        Bukkit.addRecipe(r);
+    }
+
     // ----- replaced menus -------------------------------------------------------
 
     static String menuStoreKey(Player p, boolean global, String id) {
         return "menu." + (global || p == null ? "global" : p.getUniqueId().toString()) + "." + id;
     }
 
-    /** Replacement of a menu for this player (or everyone): title, rows, items. */
-    static String[] menuOverride(Player p, String id) {
-        String v = Storage.getText(menuStoreKey(p, false, id));
-        if (v.isEmpty()) v = Storage.getText(menuStoreKey(p, true, id));
+    /** A stored replacement: title, rows, items and (optional) "slots" for a partial one. */
+    static String[] menuOverride(String key) {
+        String v = Storage.getText(key);
         if (v.isEmpty()) return null;
-        String[] parts = v.split("\u0001", 3);
-        return parts.length == 3 ? parts : null;
+        String[] parts = v.split("\u0001", 4);
+        return parts.length >= 3 ? parts : null;
     }
 
-    public static void replaceMenu(Player p, boolean global, String id, String title, double rows, String items) {
+    /** Menu lines of `base` with the slots of `over` replaced ("minecraft:air" empties a slot). */
+    static String mergeMenuItems(String base, String over) {
+        return mergeMenuItems(base, over, false);
+    }
+
+    /** keepAir: keep "minecraft:air" lines (when two partial replacements are combined). */
+    static String mergeMenuItems(String base, String over, boolean keepAir) {
+        java.util.Map<Integer, String> lines = new java.util.TreeMap<>();
+        for (String l : base.split("\n")) {
+            String[] e = menuLine(l);
+            if (e != null) lines.put((int) num(e[0]), l);
+        }
+        for (String l : over.split("\n")) {
+            String[] e = menuLine(l);
+            if (e == null) continue;
+            if (e[1].equals("minecraft:air") && !keepAir) lines.remove((int) num(e[0]));
+            else lines.put((int) num(e[0]), l);
+        }
+        return String.join("\n", lines.values());
+    }
+
+    public static void replaceMenu(Player p, boolean global, String id, String title, double rows, String items, boolean onlySlots) {
         if (!global && p == null) return;
-        Storage.setText(menuStoreKey(p, global, id), title + "\u0001" + (int) rows + "\u0001" + items);
+        String key = menuStoreKey(p, global, id);
+        if (onlySlots) {
+            // Several partial replacements add up.
+            String[] old = menuOverride(key);
+            if (old != null && old.length > 3 && old[3].equals("slots")) items = mergeMenuItems(old[2], items, true);
+            Storage.setText(key, title + "\u0001" + (int) rows + "\u0001" + items + "\u0001slots");
+        } else {
+            Storage.setText(key, title + "\u0001" + (int) rows + "\u0001" + items);
+        }
         refreshMenu(p, global, id);
     }
 

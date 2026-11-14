@@ -90,6 +90,19 @@ pub fn field_editor(
                     }
                 });
         }
+        FieldKind::Recipe => {
+            let r = crate::recipe::parse(&v);
+            let n = r.grid.iter().filter(|g| !g.is_empty()).count();
+            ui.label(
+                egui::RichText::new(format!(
+                    "{n} {} → {}",
+                    t("Zutaten", "ingredients"),
+                    crate::items::display_name(&r.result)
+                ))
+                .size(11.5)
+                .color(theme::TEXT_WEAK),
+            );
+        }
         FieldKind::MenuItemId => {
             let menu = get_val(values, "menu", "shop");
             let ids = crate::ui::menu_editor::ids_of(&menu);

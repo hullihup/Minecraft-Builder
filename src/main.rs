@@ -10,6 +10,7 @@ mod i18n;
 mod item_render;
 mod items;
 mod model;
+mod recipe;
 mod resourcepack;
 mod server;
 mod theme;

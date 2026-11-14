@@ -103,6 +103,23 @@ pub fn clean_id(s: &str) -> String {
         .collect()
 }
 
+/// The first "Open menu" block with this menu name: (title, rows, items).
+pub fn original_menu(project: &crate::model::Project, menu: &str) -> Option<(String, usize, Vec<MenuItem>)> {
+    for ws in &project.workspaces {
+        for n in ws.nodes.iter().filter(|n| n.kind == "open_menu") {
+            if n.values.get("menu").map(|s| s.as_str()).unwrap_or("shop") != menu {
+                continue;
+            }
+            let def = crate::blocks::get(&n.kind)?;
+            let default = def.field("items").map(|f| f.default).unwrap_or("");
+            let items = parse(n.values.get("items").map(|s| s.as_str()).unwrap_or(default));
+            let title = n.values.get("title").cloned().unwrap_or_else(|| "&8Shop".into());
+            return Some((title, rows_of(&n.values), items));
+        }
+    }
+    None
+}
+
 /// IDs of the menu slots of the project, for the picker on "Menu click": (menu name, id, item).
 static MENU_IDS: std::sync::RwLock<Vec<(String, String, String)>> = std::sync::RwLock::new(Vec::new());
 
@@ -118,7 +135,7 @@ pub fn publish_ids(project: &crate::model::Project) {
             let menu = n.values.get("menu").cloned().unwrap_or_else(|| "shop".into());
             let text = n.values.get(f.id).map(|s| s.as_str()).unwrap_or(f.default);
             for it in parse(text) {
-                if !it.id.is_empty() && !out.iter().any(|(m, i, _): &(String, String, String)| *m == menu && *i == it.id) {
+                if !it.id.is_empty() && it.item != "minecraft:air" && !out.iter().any(|(m, i, _): &(String, String, String)| *m == menu && *i == it.id) {
                     out.push((menu.clone(), it.id.clone(), it.item.clone()));
                 }
             }
@@ -183,6 +200,8 @@ pub enum PickTarget {
     },
     /// Base item of a resource pack item rule (model id).
     PackBase(String),
+    /// A slot of the recipe being edited (0–8 grid, 9 result).
+    RecipeSlot(usize),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -315,7 +334,7 @@ pub fn strip_codes(text: &str) -> String {
 }
 
 /// Raised Minecraft GUI panel.
-fn mc_panel(p: &Painter, r: Rect, px: f32) {
+pub fn mc_panel(p: &Painter, r: Rect, px: f32) {
     p.rect_filled(r, px * 2.0, Color32::BLACK);
     let inner = r.shrink(px);
     p.rect_filled(inner, px, MC_PANEL);
@@ -342,7 +361,7 @@ fn mc_panel(p: &Painter, r: Rect, px: f32) {
 }
 
 /// Sunken inventory slot.
-fn mc_slot(p: &Painter, r: Rect, px: f32) {
+pub fn mc_slot(p: &Painter, r: Rect, px: f32) {
     p.rect_filled(r, 0.0, MC_SLOT);
     p.rect_filled(
         Rect::from_min_max(r.min, pos2(r.right() - px, r.top() + px)),
@@ -414,6 +433,10 @@ fn mc_tooltip(ui: &mut Ui, it: &MenuItem) {
         .inner_margin(8)
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
+            if it.item == "minecraft:air" {
+                ui.label(RichText::new(t("Leer – entfernt das Original-Item", "Empty – removes the original item")).color(Color32::WHITE));
+                return;
+            }
             let name = if it.name.trim().is_empty() {
                 items::display_name(&it.item)
             } else {
@@ -495,6 +518,21 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     let rows_linked = app.project.workspaces[ws].link_into(nid, "rows").is_some();
     if rows_linked {
         rows = 6;
+    }
+    // "Replace menu" in slot mode: the original menu shows faded behind the new slots.
+    let has_mode = def.map(|d| d.field("mode").is_some()).unwrap_or(false);
+    let mut mode = val("mode", "all");
+    let mode_before = mode.clone();
+    let base = if has_mode {
+        original_menu(&app.project, &menu_id)
+    } else {
+        None
+    };
+    let slot_mode = has_mode && mode == "slots";
+    if slot_mode {
+        if let Some((_, base_rows, _)) = &base {
+            rows = *base_rows;
+        }
     }
 
     let mut selected = app.menu_edit.as_ref().and_then(|e| e.slot);
@@ -582,8 +620,21 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                             StrokeKind::Inside,
                         );
                     }
+                    if item.is_none() && slot_mode {
+                        // Item of the original menu, faded: it stays unless you put something here.
+                        if let Some(b) = base.as_ref().and_then(|b| b.2.iter().find(|x| x.slot == i)) {
+                            draw_item(app, ui, sr.shrink(px * 2.0 + 1.0), &b.item, &b.model);
+                            p.rect_filled(sr.shrink(px), 0.0, Color32::from_rgba_unmultiplied(0x8B, 0x8B, 0x8B, 170));
+                        }
+                    }
                     if let Some(it) = &item {
-                        if drag != Some(i) {
+                        if it.item == "minecraft:air" {
+                            // Marked empty: removes the original item.
+                            let c = sr.shrink(px * 4.0);
+                            let st = Stroke::new(3.0, Color32::from_rgb(0xD0, 0x30, 0x30));
+                            p.line_segment([c.left_top(), c.right_bottom()], st);
+                            p.line_segment([c.right_top(), c.left_bottom()], st);
+                        } else if drag != Some(i) {
                             draw_item(app, ui, sr.shrink(px * 2.0 + 1.0), &it.item, &it.model);
                             amount_label(&p, sr.shrink(px), it.amount, px);
                             if it.take {
@@ -619,6 +670,21 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                             .clicked()
                         {
                             open_picker = Some(i);
+                            selected = Some(i);
+                            ui.close();
+                        }
+                        if slot_mode
+                            && ui
+                                .button(t("Als leer markieren (Original-Item entfernen)", "Mark empty (remove original item)"))
+                                .clicked()
+                        {
+                            list.retain(|x| x.slot != i);
+                            list.push(MenuItem {
+                                slot: i,
+                                item: "minecraft:air".into(),
+                                amount: 1,
+                                ..Default::default()
+                            });
                             selected = Some(i);
                             ui.close();
                         }
@@ -702,6 +768,35 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     crate::ui::widgets::section_header(ui, t("Menü", "Menu"));
                     field_label(ui, t("Menü-Name (für „Klick im Menü“)", "Menu name (for “Menu click”)"));
                     ui.add(egui::TextEdit::singleline(&mut menu_id).desired_width(f32::INFINITY));
+                    if has_mode {
+                        field_label(ui, t("Ersetzen", "Replace"));
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut mode, "all".to_string(), t("Ganzes Menü", "Whole menu"));
+                            ui.selectable_value(&mut mode, "slots".to_string(), t("Nur diese Plätze", "Only these slots"));
+                        });
+                    }
+                    if slot_mode {
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(match &base {
+                                Some(_) => format!(
+                                    "{} „{}“ {}",
+                                    t("Nur die Plätze, die du hier belegst, werden ersetzt. Blass siehst du das Original-Menü", "Only the slots you fill here are replaced. Faded you see the original menu"),
+                                    menu_id,
+                                    t("– Titel und Reihen bleiben wie dort. Rechtsklick → „Als leer markieren“ entfernt ein Original-Item.", "– title and rows stay as there. Right-click → “Mark empty” removes an original item.")
+                                ),
+                                None => format!(
+                                    "{} „{}“. {}",
+                                    t("Kein Block „Menü öffnen“ mit dem Menü-Namen", "No “Open menu” block with the menu name"),
+                                    menu_id,
+                                    t("Die belegten Plätze ersetzen trotzdem die gleichen Plätze im Menü.", "The filled slots still replace the same slots in the menu.")
+                                ),
+                            })
+                            .size(11.5)
+                            .color(theme::TEXT_WEAK),
+                        );
+                    }
+                    if !slot_mode {
                     field_label(ui, t("Titel (mit &-Farbcodes)", "Title (with & color codes)"));
                     if title_linked {
                         ui.label(
@@ -755,6 +850,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                             .size(11.0)
                             .color(theme::TEXT_WEAK),
                         );
+                    }
                     }
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
@@ -980,14 +1076,19 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     if !rows_linked {
         list.retain(|i| i.slot < rows * 9);
     }
+    if mode != mode_before {
+        if let Some(n) = app.project.workspaces[ws].node_mut(nid) {
+            n.values.insert("mode".into(), mode.clone());
+        }
+    }
     let after = (menu_id.clone(), title.clone(), rows, list.clone());
     if after != before {
         if let Some(n) = app.project.workspaces[ws].node_mut(nid) {
             n.values.insert("menu".into(), menu_id);
-            if !title_linked {
+            if !title_linked && !slot_mode {
                 n.values.insert("title".into(), title);
             }
-            if !rows_linked {
+            if !rows_linked && !slot_mode {
                 n.values.insert("rows".into(), rows.to_string());
             }
             n.values.insert("items".into(), serialize(&list));
@@ -1053,6 +1154,9 @@ fn apply_pick(app: &mut App, target: &PickTarget, item: String, model: String) {
                 e.slot = Some(*slot);
             }
         }
+        PickTarget::RecipeSlot(slot) => {
+            crate::ui::recipe_editor::apply_pick(app, *slot, item, model);
+        }
         PickTarget::PackBase(key) => {
             let mut rule = app.project.settings.pack.rule(key);
             rule.base = item;
@@ -1079,7 +1183,10 @@ pub fn item_picker(app: &mut App, ctx: &egui::Context) {
     let mut query = pk.query.clone();
     let mut tab = pk.tab;
     let just_opened = std::mem::take(&mut pk.just_opened);
-    let for_menu = matches!(target, PickTarget::MenuSlot(_));
+    let for_menu = matches!(
+        target,
+        PickTarget::MenuSlot(_) | PickTarget::RecipeSlot(crate::ui::recipe_editor::RESULT)
+    );
     let pack_items: Vec<(String, String)> = match &app.pack.info {
         Some(Ok(info)) => info
             .item_models

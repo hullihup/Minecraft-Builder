@@ -6,6 +6,7 @@ pub mod icons;
 pub mod menu_editor;
 pub mod onboarding;
 pub mod palette;
+pub mod recipe_editor;
 pub mod panels;
 pub mod resources;
 pub mod settings;

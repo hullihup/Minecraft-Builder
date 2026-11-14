@@ -383,6 +383,7 @@ impl<'a> Gen<'a> {
             | FieldKind::Multiline
             | FieldKind::ItemModel
             | FieldKind::Menu
+            | FieldKind::Recipe
             | FieldKind::MenuItemId => {
                 v.to_string()
             }
@@ -529,6 +530,10 @@ struct Parts {
     members: Vec<String>,
     /// Paper: plugin.yml command entries.
     commands: Vec<CmdInfo>,
+    /// Extra files (Fabric recipe JSON).
+    files: Vec<(String, Vec<u8>)>,
+    /// Recipe names used so far (must be unique).
+    recipes: HashMap<String, NodeId>,
 }
 
 struct CmdInfo {
@@ -965,6 +970,7 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                     }
                 }
             }
+            Special::Recipe => {}
             Special::None => match g.p {
                 Platform::Paper => {
                     let mut sc = new_scope("return;");
@@ -1028,6 +1034,41 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
         }
     }
 
+    // Recipes: registered at start, no flow needed.
+    for n in ws.nodes.iter().filter(|n| n.kind == "recipe") {
+        let Some(def) = blocks::get(&n.kind) else { continue };
+        g.reached.insert(n.id);
+        if !g.check_platform(n, def) {
+            continue;
+        }
+        let d = crate::recipe::from_node(n);
+        if let Some(msg) = crate::recipe::problem(&d) {
+            g.err(n.id, msg);
+            continue;
+        }
+        if let Some(other) = parts.recipes.get(&d.id) {
+            g.err(
+                n.id,
+                format!("Den Rezept-Namen „{}“ gibt es schon (Block #{other})", d.id),
+            );
+            continue;
+        }
+        parts.recipes.insert(d.id.clone(), n.id);
+        match g.p {
+            Platform::Paper => {
+                parts.init.push(format!("// Rezept „{}“ (#{})", d.id, n.id));
+                parts.init.push(crate::recipe::paper_code(&d));
+            }
+            Platform::Fabric => {
+                let modid = &g.proj.settings.id;
+                parts.files.push((
+                    format!("src/main/resources/data/{modid}/recipe/{}.json", d.id),
+                    crate::recipe::fabric_json(&d).into_bytes(),
+                ));
+            }
+        }
+    }
+
     // Blocks that never run.
     for n in &ws.nodes {
         if g.reached.contains(&n.id) {
@@ -1078,6 +1119,8 @@ pub fn generate(proj: &Project) -> Output {
         init: vec![],
         members: vec![],
         commands: vec![],
+        files: vec![],
+        recipes: HashMap::new(),
     };
     let mut seen_cmds = HashMap::new();
 
@@ -1434,6 +1477,7 @@ tasks.withType(JavaCompile).configureEach {{
             );
         }
     }
+    files.extend(parts.files.drain(..));
     files.push((
         "gradle/wrapper/gradle-wrapper.jar".into(),
         WRAPPER_JAR.to_vec(),

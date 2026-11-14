@@ -242,6 +242,8 @@ pub struct App {
     pub settings_tab: crate::ui::settings::Tab,
     pub server_ui: crate::ui::settings::ServerUi,
     pub menu_edit: Option<crate::ui::menu_editor::MenuEdit>,
+    /// Recipe block being edited: (workspace, node).
+    pub recipe_edit: Option<(usize, NodeId)>,
     pub item_picker: Option<crate::ui::menu_editor::ItemPicker>,
     allow_close: bool,
     title: String,
@@ -309,6 +311,7 @@ impl App {
             settings_tab: crate::ui::settings::Tab::General,
             server_ui: Default::default(),
             menu_edit: None,
+            recipe_edit: None,
             item_picker: None,
             allow_close: false,
             title: String::new(),
@@ -383,6 +386,7 @@ impl App {
         self.cmd_draft = None;
         self.show_commands = false;
         self.menu_edit = None;
+        self.recipe_edit = None;
         self.item_picker = None;
         self.refresh_pack(true);
     }
@@ -1506,6 +1510,7 @@ impl eframe::App for App {
             ui::commands::show(self, &ctx);
         }
         ui::menu_editor::show(self, &ctx);
+        ui::recipe_editor::show(self, &ctx);
         ui::menu_editor::item_picker(self, &ctx);
         ui::onboarding::show(self, &ctx);
         ui::onboarding::tutorial(self, &ctx);
