@@ -595,7 +595,7 @@ pub fn activity_bar(app: &mut App, ui: &mut Ui) {
                 ),
                 (
                     Activity::Project,
-                    Icon::Gear,
+                    Icon::Sliders,
                     t("Projekt & Versionen", "Project & versions"),
                 ),
                 (
@@ -634,8 +634,33 @@ pub fn activity_bar(app: &mut App, ui: &mut Ui) {
                     }
                 }
             }
+            // Settings: always at the bottom left.
+            ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+                ui.add_space(6.0);
+                if settings_gear(ui, 36.0).clicked() {
+                    crate::ui::settings::open(app, crate::ui::settings::Tab::General);
+                }
+            });
         });
     app.ui_rects.insert("activity", resp.response.rect);
+}
+
+/// The settings button (gear) shown at the bottom left on every screen.
+pub fn settings_gear(ui: &mut Ui, size: f32) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
+    let hov = resp.hovered();
+    if hov {
+        ui.painter()
+            .rect_filled(r, 8.0, Color32::from_white_alpha(16));
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    icons::paint(
+        ui.painter(),
+        egui::Rect::from_center_size(r.center(), vec2(size * 0.58, size * 0.58)),
+        Icon::Gear,
+        if hov { theme::TEXT } else { theme::TEXT_WEAK },
+    );
+    resp.on_hover_text(t("Einstellungen", "Settings"))
 }
 
 // --------------------------------------------------------------- sidebar
@@ -1141,7 +1166,61 @@ fn sidebar_build(app: &mut App, ui: &mut Ui) {
         });
         ui.add_space(10.0);
     }
-    section_header(ui, t("Test-Server", "Test server"));
+    section_header(ui, t("Server (automatisch hochladen)", "Server (automatic upload)"));
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new(match app.project.settings.platform {
+            Platform::Paper => t("Nach jedem Build landet die .jar im Ordner plugins/ deines Servers.", "After every build the jar ends up in your server's plugins/ folder."),
+            Platform::Fabric => t("Nach jedem Build landet die .jar im Ordner mods/ deines Servers.", "After every build the jar ends up in your server's mods/ folder."),
+        })
+        .size(11.0)
+        .color(theme::TEXT_WEAK),
+    );
+    ui.add_space(4.0);
+    {
+        let current = app.project.settings.deploy_server;
+        let label = app
+            .settings
+            .server(current)
+            .map(|s| s.display_name())
+            .unwrap_or_else(|| t("(kein Server)", "(no server)").to_string());
+        let mut pick = current;
+        egui::ComboBox::from_id_salt("deploy_server")
+            .width(ui.available_width())
+            .selected_text(label)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut pick, 0, t("(kein Server)", "(no server)"));
+                for s in &app.settings.servers {
+                    ui.selectable_value(&mut pick, s.id, s.display_name());
+                }
+            });
+        app.project.settings.deploy_server = pick;
+        if let Some(s) = app.settings.server(pick) {
+            if !s.ready() {
+                ui.label(
+                    RichText::new(t("Dieser Server ist noch nicht fertig eingerichtet.", "This server is not set up completely yet."))
+                        .size(11.0)
+                        .color(theme::YELLOW),
+                );
+            }
+        }
+        ui.add_space(4.0);
+        if icons::button(
+            ui,
+            Some(Icon::Cloud),
+            if app.settings.servers.is_empty() {
+                t("Server verbinden…", "Connect a server…")
+            } else {
+                t("Server verwalten…", "Manage servers…")
+            },
+        )
+        .clicked()
+        {
+            crate::ui::settings::open(app, crate::ui::settings::Tab::Servers);
+        }
+    }
+    ui.add_space(14.0);
+    section_header(ui, t("Lokaler Test-Server", "Local test server"));
     ui.add_space(4.0);
     ui.label(
         RichText::new(match app.project.settings.platform {

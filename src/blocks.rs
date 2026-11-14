@@ -141,18 +141,22 @@ pub enum Cat {
     Data,
     Resources,
     Server,
+    Location,
+    Files,
 }
 
-pub const CATEGORIES: [Cat; 11] = [
+pub const CATEGORIES: [Cat; 13] = [
     Cat::Events,
     Cat::Messages,
     Cat::Player,
     Cat::World,
+    Cat::Location,
     Cat::Flow,
     Cat::Logic,
     Cat::Math,
     Cat::Text,
     Cat::Data,
+    Cat::Files,
     Cat::Resources,
     Cat::Server,
 ];
@@ -171,6 +175,8 @@ impl Cat {
             Cat::Data => ("Gespeicherte Daten", "Stored data"),
             Cat::Resources => ("Texturen & Modelle", "Textures & models"),
             Cat::Server => ("Server", "Server"),
+            Cat::Location => ("Positionen", "Locations"),
+            Cat::Files => ("Dateien & Einstellungen", "Files & settings"),
         }
     }
     pub fn color(self) -> Color32 {
@@ -186,6 +192,8 @@ impl Cat {
             Cat::Data => Color32::from_rgb(0xFF, 0x7A, 0xC6),
             Cat::Resources => Color32::from_rgb(0xC0, 0x8B, 0xFF),
             Cat::Server => Color32::from_rgb(0x9A, 0xA4, 0xB2),
+            Cat::Location => Color32::from_rgb(0xFF, 0xC8, 0x4D),
+            Cat::Files => Color32::from_rgb(0xFF, 0x9A, 0x3D),
         }
     }
     pub fn icon_kind(self) -> crate::ui::icons::Icon {
@@ -202,6 +210,8 @@ impl Cat {
             Cat::Data => I::Database,
             Cat::Resources => I::Image,
             Cat::Server => I::Server,
+            Cat::Location => I::Pin,
+            Cat::Files => I::Folder,
         }
     }
     #[allow(dead_code)]
@@ -218,6 +228,8 @@ impl Cat {
             Cat::Data => "💾",
             Cat::Resources => "🎨",
             Cat::Server => "🖧",
+            Cat::Location => "📍",
+            Cat::Files => "📁",
         }
     }
 }
@@ -231,6 +243,8 @@ pub struct PinDef {
     pub default: &'static str,
     /// Optional input that is folded away under "more options" on the block.
     pub advanced: bool,
+    /// What this socket does (shown when hovering it). Falls back to `pin_help`.
+    pub help: Option<L>,
 }
 
 /// Pin label: fixed bilingual text, or a dynamic one (command options).
@@ -264,6 +278,7 @@ impl PinDef {
             ty: PinType::Exec,
             default: "",
             advanced: false,
+            help: None,
         }
     }
 }
@@ -277,6 +292,8 @@ pub enum FieldKind {
     Choice(&'static [(&'static str, L)]),
     /// Item model id, with a picker listing the models of the project's resource pack.
     ItemModel,
+    /// Chest menu layout, edited in the menu editor window.
+    Menu,
 }
 
 #[derive(Clone, Debug)]
@@ -359,7 +376,8 @@ impl BlockDef {
 // Builder
 // ---------------------------------------------------------------------------
 
-struct B(BlockDef);
+/// Block being built; the flag remembers whether the last pin added was an output.
+struct B(BlockDef, bool);
 
 fn b(id: &'static str, cat: Cat, kind: Kind, name: L, desc: L) -> B {
     let mut d = BlockDef {
@@ -388,7 +406,7 @@ fn b(id: &'static str, cat: Cat, kind: Kind, name: L, desc: L) -> B {
         }
         Kind::Value => {}
     }
-    B(d)
+    B(d, false)
 }
 
 impl B {
@@ -399,7 +417,9 @@ impl B {
             ty,
             default,
             advanced: false,
+            help: None,
         });
+        self.1 = false;
         self
     }
     /// Optional input, folded away on the block until opened or connected.
@@ -410,7 +430,9 @@ impl B {
             ty,
             default,
             advanced: true,
+            help: None,
         });
+        self.1 = false;
         self
     }
     fn o(mut self, id: &'static str, label: L, ty: PinType) -> Self {
@@ -420,7 +442,21 @@ impl B {
             ty,
             default: "",
             advanced: false,
+            help: None,
         });
+        self.1 = true;
+        self
+    }
+    /// Describes the socket added last (shown on hover).
+    fn h(mut self, help: L) -> Self {
+        let pin = if self.1 {
+            self.0.outputs.last_mut()
+        } else {
+            self.0.inputs.last_mut()
+        };
+        if let Some(p) = pin {
+            p.help = Some(help);
+        }
         self
     }
     fn f(mut self, id: &'static str, label: L, kind: FieldKind, default: &'static str) -> Self {
@@ -562,6 +598,15 @@ const WEATHER: &[(&str, L)] = &[
     ("clear", ("Sonne", "Clear")),
     ("rain", ("Regen", "Rain")),
     ("thunder", ("Gewitter", "Thunder")),
+];
+
+const EQUIP_SLOTS: &[(&str, L)] = &[
+    ("HEAD", ("Kopf", "Head")),
+    ("CHEST", ("Brust", "Chest")),
+    ("LEGS", ("Beine", "Legs")),
+    ("FEET", ("Füße", "Feet")),
+    ("OFFHAND", ("Zweithand", "Off hand")),
+    ("MAINHAND", ("Haupthand", "Main hand")),
 ];
 
 const CASES: &[(&str, L)] = &[
@@ -2034,29 +2079,37 @@ fn build_all() -> Vec<BlockDef> {
     v.push(
         b("open_menu", C::Player, K::Action,
             ("Menü öffnen", "Open menu"),
-            ("Öffnet ein Kisten-Menü mit Items, z. B. für Shops oder Teleporter. Eine Zeile pro Item: „Platz: item | Name | Beschreibung“, z. B. „13: minecraft:diamond | &bDiamant | &7Kostet 5 Gold“. Klicks fängst du mit „Klick im Menü“ ab. Nur Paper.",
-             "Opens a chest menu with items, e.g. for shops or teleporters. One line per item: “slot: item | name | lore”, e.g. “13: minecraft:diamond | &bDiamond | &7Costs 5 gold”. Catch clicks with “Menu click”. Paper only."))
+            ("Öffnet ein Kisten-Menü mit Items, z. B. für Shops oder Teleporter. Mit „Menü bearbeiten“ legst du Reihen und Items fest – wie in einer echten Kiste. Klicks fängst du mit „Klick im Menü“ ab. Nur Paper.",
+             "Opens a chest menu with items, e.g. for shops or teleporters. “Edit menu” lets you set rows and items – like in a real chest. Catch clicks with “Menu click”. Paper only."))
             .f("menu", ("Menü-Name", "Menu name"), F::Text, "shop")
-            .f("items", ("Items", "Items"), F::Multiline, "11: minecraft:diamond | &bDiamant\n15: minecraft:emerald | &aSmaragd")
+            .f("items", ("Items", "Items"), F::Menu, "11\tminecraft:diamond\t&bDiamant\t\t1\t\t\n15\tminecraft:emerald\t&aSmaragd\t\t1\t\t")
             .i("player", p_player, T::Player, "")
+            .h(("Wem das Menü geöffnet wird. Nicht verbunden = der Spieler aus dem Event.", "Who the menu is opened for. Not connected = the player from the event."))
             .i("title", ("Titel", "Title"), T::Text, "&8Shop")
+            .h(("Überschrift oben im Menü (mit &-Farbcodes).", "Heading at the top of the menu (with & color codes)."))
             .i("rows", ("Reihen", "Rows"), T::Number, "3")
+            .h(("Wie viele Reihen das Menü hat (1–6, je 9 Plätze).", "How many rows the menu has (1–6, 9 slots each)."))
             .paper("Util.openMenu(${in:player}, ${s:menu}, ${in:title}, ${in:rows}, ${s:items});"),
     );
     v.push(
         b("ev_menu_click", C::Events, K::Event,
             ("Klick im Menü", "Menu click"),
-            ("Wird ausgelöst, wenn ein Spieler in einem Menü von „Menü öffnen“ klickt. Items können dort nicht herausgenommen werden. Nur Paper.",
-             "Fires when a player clicks in a menu from “Open menu”. Items can't be taken out. Paper only."))
+            ("Wird ausgelöst, wenn ein Spieler in einem Menü von „Menü öffnen“ klickt. Items bleiben im Menü, außer du erlaubst das Herausnehmen im Menü-Editor. Nur Paper.",
+             "Fires when a player clicks in a menu from “Open menu”. Items stay in the menu unless you allow taking them in the menu editor. Paper only."))
             .f("menu", ("Menü-Name", "Menu name"), F::Text, "shop")
             .o("player", p_player, T::Player)
             .o("slot", ("Platz", "Slot"), T::Number)
+            .h(("Nummer des angeklickten Platzes: 0 ist oben links, pro Reihe 9 Plätze.", "Number of the clicked slot: 0 is top left, 9 slots per row."))
             .o("item", ("Item-ID", "Item id"), T::Text)
+            .h(("ID des angeklickten Items, z. B. minecraft:diamond (minecraft:air bei leerem Platz).", "Id of the clicked item, e.g. minecraft:diamond (minecraft:air for an empty slot)."))
+            .o("model", ("Modell", "Model"), T::Text)
+            .h(("Modell-ID des angeklickten Items – bei eigenen Items aus dem Resourcepack z. B. meinpack:zauberstab.", "Model id of the clicked item – for custom items from the resource pack e.g. mypack:wand."))
             .listener("org.bukkit.event.inventory.InventoryClickEvent", false)
-            .paper("if (!(event.getInventory().getHolder() instanceof Util.MenuHolder __mh) || !__mh.id.equals(${s:menu})) return;\n    event.setCancelled(true);\n    if (event.getClickedInventory() != event.getView().getTopInventory()) return;")
+            .paper("if (!(event.getInventory().getHolder() instanceof Util.MenuHolder __mh) || !__mh.id.equals(${s:menu})) return;\n    if (event.getClickedInventory() != event.getView().getTopInventory()) return;")
             .pout("player", "(org.bukkit.entity.Player) event.getWhoClicked()")
             .pout("slot", "event.getSlot()")
-            .pout("item", "Util.itemId(event.getCurrentItem())"),
+            .pout("item", "Util.itemId(event.getCurrentItem())")
+            .pout("model", "Util.modelOf(event.getCurrentItem())"),
     );
     v.push(
         b(
@@ -2072,6 +2125,377 @@ fn build_all() -> Vec<BlockDef> {
         .i("player", p_player, T::Player, "")
         .paper("${in:player}.closeInventory();")
         .fabric("${in:player}.closeContainer();"),
+    );
+
+
+    // -------------------------------------------------------------- Locations
+    v.push(
+        b("player_loc", C::Location, K::Value,
+            ("Position holen", "Get location"),
+            ("Wo der Spieler gerade steht: als Position und einzeln als X, Y, Z und Welt. Die Position kannst du speichern, vergleichen oder zum Teleportieren benutzen.",
+             "Where the player is right now: as a location and separately as X, Y, Z and world. You can store the location, compare it or teleport to it."))
+            .i("player", p_player, T::Player, "")
+            .o("loc", ("Position", "Location"), T::Location)
+            .h(("Die komplette Position (Welt + Koordinaten). Verbinde sie z. B. mit „Position speichern“ oder „Teleportieren“.", "The whole location (world + coordinates). Connect it e.g. to “Save location” or “Teleport”."))
+            .o("x", ("X", "X"), T::Number)
+            .o("y", ("Y (Höhe)", "Y (height)"), T::Number)
+            .o("z", ("Z", "Z"), T::Number)
+            .o("world", ("Welt", "World"), T::Text)
+            .pout("loc", "${in:player}.getLocation()")
+            .pout("x", "${in:player}.getLocation().getX()")
+            .pout("y", "${in:player}.getLocation().getY()")
+            .pout("z", "${in:player}.getLocation().getZ()")
+            .pout("world", "${in:player}.getWorld().getName()")
+            .fout("loc", "Loc.of(${in:player})")
+            .fout("x", "${in:player}.getX()")
+            .fout("y", "${in:player}.getY()")
+            .fout("z", "${in:player}.getZ()")
+            .fout("world", "Util.worldName(${in:player}.level())"),
+    );
+    v.push(
+        b("loc_save", C::Location, K::Action,
+            ("Position speichern", "Save location"),
+            ("Speichert eine Position dauerhaft unter einem Namen, z. B. „home“ – pro Spieler oder für alle. Bleibt nach einem Neustart erhalten.",
+             "Stores a location permanently under a name, e.g. “home” – per player or for everyone. Survives restarts."))
+            .f("scope", ("Bereich", "Scope"), F::Choice(SCOPES), "player")
+            .i("player", p_player, T::Player, "")
+            .i("key", ("Name", "Name"), T::Text, "home")
+            .h(("Unter diesem Namen wird die Position abgelegt. Derselbe Name bei „Position laden“ holt sie zurück.", "The location is stored under this name. The same name in “Load location” brings it back."))
+            .i("loc", ("Position", "Location"), T::Location, "")
+            .h(("Die Position, die gespeichert wird. Nicht verbunden = die Position des Spielers aus dem Event.", "The location to store. Not connected = the location of the player from the event."))
+            .both("Util.saveLoc(${storekey}, ${in:loc});"),
+    );
+    v.push(
+        b("loc_load", C::Location, K::Flow,
+            ("Position laden", "Load location"),
+            ("Holt eine gespeicherte Position zurück. Gibt es sie, geht es bei „Gefunden“ weiter, sonst bei „Nicht gefunden“ (z. B. für eine Fehlermeldung).",
+             "Brings back a stored location. If it exists the flow continues at “Found”, otherwise at “Not found” (e.g. for an error message)."))
+            .f("scope", ("Bereich", "Scope"), F::Choice(SCOPES), "player")
+            .i("player", p_player, T::Player, "")
+            .i("key", ("Name", "Name"), T::Text, "home")
+            .o("found", ("Gefunden", "Found"), T::Exec)
+            .h(("Läuft, wenn unter dem Namen eine Position gespeichert ist.", "Runs if a location is stored under the name."))
+            .o("missing", ("Nicht gefunden", "Not found"), T::Exec)
+            .h(("Läuft, wenn noch nichts gespeichert wurde.", "Runs if nothing has been stored yet."))
+            .o("loc", ("Position", "Location"), T::Location)
+            .h(("Die geladene Position – nur im Zweig „Gefunden“ benutzbar.", "The loaded location – only usable in the “Found” branch."))
+            .paper("final org.bukkit.Location ${out:loc} = Util.loadLoc(${storekey});\nif (${out:loc} != null) {\n${exec:found}\n} else {\n${exec:missing}\n}")
+            .fabric("final Loc ${out:loc} = Util.loadLoc(${storekey});\nif (${out:loc} != null) {\n${exec:found}\n} else {\n${exec:missing}\n}"),
+    );
+    v.push(
+        b("loc_exists", C::Location, K::Value,
+            ("Position gespeichert?", "Location stored?"),
+            ("Ja, wenn unter dem Namen eine Position gespeichert ist.", "Yes if a location is stored under the name."))
+            .f("scope", ("Bereich", "Scope"), F::Choice(SCOPES), "player")
+            .i("player", p_player, T::Player, "")
+            .i("key", ("Name", "Name"), T::Text, "home")
+            .o("res", ("Ergebnis", "Result"), T::Bool)
+            .bout("res", "(Util.loadLoc(${storekey}) != null)"),
+    );
+    v.push(
+        b("loc_delete", C::Location, K::Action,
+            ("Gespeicherte Position löschen", "Delete stored location"),
+            ("Entfernt eine gespeicherte Position wieder.", "Removes a stored location again."))
+            .f("scope", ("Bereich", "Scope"), F::Choice(SCOPES), "player")
+            .i("player", p_player, T::Player, "")
+            .i("key", ("Name", "Name"), T::Text, "home")
+            .both("Storage.removeText(\"loc.\" + ${storekey});"),
+    );
+    v.push(
+        b("look_loc", C::Location, K::Value,
+            ("Position im Blick", "Location in sight"),
+            ("Der Block, auf den der Spieler schaut. Ist nichts in Reichweite, kommt die Position des Spielers heraus.",
+             "The block the player looks at. If nothing is in range you get the player's own location."))
+            .i("player", p_player, T::Player, "")
+            .i("distance", ("Reichweite", "Range"), T::Number, "50")
+            .h(("Wie viele Blöcke weit gesucht wird (höchstens 120).", "How many blocks far to look (120 at most)."))
+            .o("loc", ("Position", "Location"), T::Location)
+            .bout("loc", "Util.lookLoc(${in:player}, ${in:distance})"),
+    );
+    v.push(
+        b("loc_block", C::Location, K::Value,
+            ("Blockmitte", "Block center"),
+            ("Rundet eine Position auf die Mitte ihres Blocks – praktisch, damit Spieler nach dem Teleport nicht in einer Kante stehen.",
+             "Rounds a location to the middle of its block – handy so players don't end up on an edge after teleporting."))
+            .i("loc", ("Position", "Location"), T::Location, "")
+            .o("res", ("Position", "Location"), T::Location)
+            .bout("res", "Util.blockLoc(${in:loc})"),
+    );
+    v.push(
+        b("loc_in_area", C::Location, K::Value,
+            ("In Bereich?", "In area?"),
+            ("Ja, wenn die Position im Quader zwischen den beiden Ecken liegt (z. B. Spawn-Schutz oder Arena).",
+             "Yes if the location is inside the box between the two corners (e.g. spawn protection or an arena)."))
+            .i("loc", ("Position", "Location"), T::Location, "")
+            .h(("Die Position, die geprüft wird. Nicht verbunden = die Position des Spielers aus dem Event.", "The location to check. Not connected = the location of the player from the event."))
+            .i("a", ("Ecke 1", "Corner 1"), T::Location, "")
+            .i("b", ("Ecke 2", "Corner 2"), T::Location, "")
+            .o("res", ("Ergebnis", "Result"), T::Bool)
+            .bout("res", "Util.inArea(${in:loc}, ${in:a}, ${in:b})"),
+    );
+    v.push(
+        b("world_spawn", C::Location, K::Value,
+            ("Welt-Spawn", "World spawn"),
+            ("Der Spawnpunkt einer Welt. Nur Paper.", "The spawn point of a world. Paper only."))
+            .i("world", ("Welt", "World"), T::Text, "world")
+            .o("loc", ("Position", "Location"), T::Location)
+            .pout("loc", "Util.spawnLoc(${in:world})"),
+    );
+    v.push(
+        b("respawn_loc", C::Location, K::Value,
+            ("Bett / Respawn-Punkt", "Bed / respawn point"),
+            ("Wo der Spieler nach dem Tod wieder erscheint (Bett oder Anker), sonst der Welt-Spawn. Nur Paper.",
+             "Where the player reappears after dying (bed or anchor), otherwise the world spawn. Paper only."))
+            .i("player", p_player, T::Player, "")
+            .o("loc", ("Position", "Location"), T::Location)
+            .pout("loc", "Util.respawnLoc(${in:player})"),
+    );
+    v.push(
+        b("loc_surface", C::Location, K::Value,
+            ("Oberfläche", "Surface"),
+            ("Die erste freie Stelle über dem höchsten Block an dieser Position – gut für sichere Zufalls-Teleports. Nur Paper.",
+             "The first free spot above the highest block at this location – good for safe random teleports. Paper only."))
+            .i("loc", ("Position", "Location"), T::Location, "")
+            .o("res", ("Position", "Location"), T::Location)
+            .pout("res", "Util.surface(${in:loc})"),
+    );
+
+    // ------------------------------------------------------ Files & settings
+    let p_file = ("Datei", "File");
+    let h_file: L = (
+        "Pfad im Ordner deines Plugins (plugins/<Name>/) bzw. Mods (config/<id>/). Unterordner mit / trennen.",
+        "Path inside your plugin's folder (plugins/<Name>/) or mod's folder (config/<id>/). Separate subfolders with /.",
+    );
+    v.push(
+        b("folder_create", C::Files, K::Action,
+            ("Ordner erstellen", "Create folder"),
+            ("Legt einen Ordner im Datenordner an – bei Plugins plugins/<Name>/…, bei Mods config/<id>/…. Der Hauptordner selbst entsteht automatisch. Am besten gleich „Beim Start“.",
+             "Creates a folder in the data folder – plugins/<Name>/… for plugins, config/<id>/… for mods. The main folder itself is created automatically. Best done right “On start”."))
+            .i("path", ("Ordner", "Folder"), T::Text, "daten")
+            .h(("Name des Ordners, auch verschachtelt wie „daten/spieler“.", "Name of the folder, also nested like “data/players”."))
+            .both("DataFiles.mkdir(${in:path});"),
+    );
+    v.push(
+        b("cfg_default", C::Files, K::Action,
+            ("Einstellung anlegen", "Add setting"),
+            ("Schreibt eine Einstellung mit Standardwert in eine Einstellungsdatei, falls sie dort noch fehlt. So entsteht z. B. plugins/<Name>/settings.yml, die Server-Besitzer bearbeiten können.",
+             "Writes a setting with a default value into a settings file if it is missing there. That creates e.g. plugins/<Name>/settings.yml for server owners to edit."))
+            .i("file", p_file, T::Text, "settings.yml")
+            .h(h_file)
+            .i("key", ("Einstellung", "Setting"), T::Text, "willkommen")
+            .h(("Name der Einstellung, z. B. „willkommen“ oder „shop.preis“.", "Name of the setting, e.g. “welcome” or “shop.price”."))
+            .i("value", ("Standardwert", "Default value"), T::Text, "&aWillkommen!")
+            .ia("comment", ("Kommentar", "Comment"), T::Text, "")
+            .h(("Erklärung, die als #-Zeile über der Einstellung in der Datei steht.", "Explanation written as a # line above the setting in the file."))
+            .both("DataFiles.cfgDefault(${in:file}, ${in:key}, ${in:value}, ${in:comment});"),
+    );
+    v.push(
+        b("cfg_text", C::Files, K::Value,
+            ("Einstellung (Text)", "Setting (text)"),
+            ("Liest einen Text aus einer Einstellungsdatei.", "Reads a text from a settings file."))
+            .i("file", p_file, T::Text, "settings.yml")
+            .h(h_file)
+            .i("key", ("Einstellung", "Setting"), T::Text, "willkommen")
+            .ia("default", ("Sonst", "Otherwise"), T::Text, "")
+            .h(("Dieser Wert kommt heraus, wenn die Einstellung fehlt.", "This value is used if the setting is missing."))
+            .o("value", ("Text", "Text"), T::Text)
+            .bout("value", "DataFiles.cfgText(${in:file}, ${in:key}, ${in:default})"),
+    );
+    v.push(
+        b("cfg_num", C::Files, K::Value,
+            ("Einstellung (Zahl)", "Setting (number)"),
+            ("Liest eine Zahl aus einer Einstellungsdatei.", "Reads a number from a settings file."))
+            .i("file", p_file, T::Text, "settings.yml")
+            .h(h_file)
+            .i("key", ("Einstellung", "Setting"), T::Text, "preis")
+            .ia("default", ("Sonst", "Otherwise"), T::Number, "0")
+            .o("value", ("Zahl", "Number"), T::Number)
+            .bout("value", "DataFiles.cfgNum(${in:file}, ${in:key}, ${in:default})"),
+    );
+    v.push(
+        b("cfg_bool", C::Files, K::Value,
+            ("Einstellung (Ja/Nein)", "Setting (yes/no)"),
+            ("Liest einen Schalter aus einer Einstellungsdatei (true/false, ja/nein, an/aus).", "Reads a switch from a settings file (true/false, yes/no, on/off)."))
+            .i("file", p_file, T::Text, "settings.yml")
+            .h(h_file)
+            .i("key", ("Einstellung", "Setting"), T::Text, "aktiv")
+            .ia("default", ("Sonst", "Otherwise"), T::Bool, "true")
+            .o("value", ("Ja/Nein", "Yes/No"), T::Bool)
+            .bout("value", "DataFiles.cfgBool(${in:file}, ${in:key}, ${in:default})"),
+    );
+    v.push(
+        b("cfg_set", C::Files, K::Action,
+            ("Einstellung ändern", "Change setting"),
+            ("Schreibt einen neuen Wert in eine Einstellungsdatei. Kommentare in der Datei bleiben erhalten.", "Writes a new value into a settings file. Comments in the file are kept."))
+            .i("file", p_file, T::Text, "settings.yml")
+            .h(h_file)
+            .i("key", ("Einstellung", "Setting"), T::Text, "willkommen")
+            .i("value", ("Wert", "Value"), T::Text, "")
+            .both("DataFiles.cfgSet(${in:file}, ${in:key}, ${in:value});"),
+    );
+    v.push(
+        b("cfg_reload", C::Files, K::Action,
+            ("Einstellungen neu laden", "Reload settings"),
+            ("Liest eine Einstellungsdatei neu von der Festplatte – z. B. in einem /reload-Befehl, nachdem jemand die Datei bearbeitet hat. Leer = alle Dateien.",
+             "Reads a settings file from disk again – e.g. in a /reload command after someone edited the file. Empty = all files."))
+            .i("file", p_file, T::Text, "settings.yml")
+            .both("DataFiles.cfgReload(${in:file});"),
+    );
+    v.push(
+        b("file_write", C::Files, K::Action,
+            ("Datei schreiben", "Write file"),
+            ("Schreibt Text in eine Datei im Datenordner (ersetzt den alten Inhalt). Fehlende Ordner werden angelegt.", "Writes text into a file in the data folder (replaces the old content). Missing folders are created."))
+            .i("file", p_file, T::Text, "notiz.txt")
+            .h(h_file)
+            .i("text", ("Inhalt", "Content"), T::Text, "")
+            .both("DataFiles.write(${in:file}, ${in:text});"),
+    );
+    v.push(
+        b("file_append", C::Files, K::Action,
+            ("Zeile anhängen", "Append line"),
+            ("Hängt eine Zeile ans Ende einer Datei an – gut für eigene Logs.", "Appends a line to the end of a file – good for your own logs."))
+            .i("file", p_file, T::Text, "log.txt")
+            .h(h_file)
+            .i("text", ("Zeile", "Line"), T::Text, "")
+            .both("DataFiles.append(${in:file}, ${in:text});"),
+    );
+    v.push(
+        b("file_read", C::Files, K::Value,
+            ("Datei lesen", "Read file"),
+            ("Der ganze Inhalt einer Datei als Text (leer, wenn es sie nicht gibt).", "The whole content of a file as text (empty if it does not exist)."))
+            .i("file", p_file, T::Text, "notiz.txt")
+            .h(h_file)
+            .o("text", ("Inhalt", "Content"), T::Text)
+            .bout("text", "DataFiles.read(${in:file})"),
+    );
+    v.push(
+        b("file_exists", C::Files, K::Value,
+            ("Datei vorhanden?", "File exists?"),
+            ("Ja, wenn es die Datei oder den Ordner gibt.", "Yes if the file or folder exists."))
+            .i("file", p_file, T::Text, "settings.yml")
+            .h(h_file)
+            .o("res", ("Ergebnis", "Result"), T::Bool)
+            .bout("res", "DataFiles.exists(${in:file})"),
+    );
+    v.push(
+        b("file_delete", C::Files, K::Action,
+            ("Datei löschen", "Delete file"),
+            ("Löscht eine Datei oder einen leeren Ordner im Datenordner.", "Deletes a file or an empty folder in the data folder."))
+            .i("file", p_file, T::Text, "notiz.txt")
+            .h(h_file)
+            .both("DataFiles.delete(${in:file});"),
+    );
+    v.push(
+        b("file_list", C::Files, K::Value,
+            ("Dateien im Ordner", "Files in folder"),
+            ("Die Namen aller Dateien eines Ordners, mit Komma getrennt.", "The names of all files in a folder, separated by commas."))
+            .i("path", ("Ordner", "Folder"), T::Text, "daten")
+            .o("names", ("Namen", "Names"), T::Text)
+            .bout("names", "DataFiles.list(${in:path})"),
+    );
+
+    // --------------------------------------------------- More resource pack
+    let h_model: L = (
+        "Ein Modell aus deinem Resourcepack (Seitenleiste „Texturen & Modelle“).",
+        "A model from your resource pack (sidebar “Textures & models”).",
+    );
+    let _ = h_model;
+    v.push(
+        b("ev_custom_use", C::Resources, K::Event,
+            ("Rechtsklick mit eigenem Item", "Right click with custom item"),
+            ("Wird ausgelöst, wenn ein Spieler mit einem Item rechtsklickt, das dieses Modell hat – z. B. für Zauberstäbe. Kann abgebrochen werden.",
+             "Fires when a player right-clicks with an item that has this model – e.g. for magic wands. Can be cancelled."))
+            .f("model", ("Modell", "Model"), F::ItemModel, "")
+            .o("player", p_player, T::Player)
+            .listener("org.bukkit.event.player.PlayerInteractEvent", true)
+            .paper("if (event.getHand() != org.bukkit.inventory.EquipmentSlot.HAND || !event.getAction().isRightClick() || !Util.heldModel(event.getPlayer()).equalsIgnoreCase(${s:model})) return;")
+            .pout("player", "event.getPlayer()")
+            .fabric("UseItemCallback.EVENT.register((__p, level, hand) -> {\n    if (level.isClientSide() || hand != InteractionHand.MAIN_HAND || !(__p instanceof ServerPlayer) || !Util.heldModel((ServerPlayer) __p).equalsIgnoreCase(${s:model})) return InteractionResult.PASS;\n${body}\n    return __cancel[0] ? InteractionResult.FAIL : InteractionResult.PASS;\n});")
+            .fcancel("return __cancel[0] ? InteractionResult.FAIL : InteractionResult.PASS;")
+            .fout("player", "(ServerPlayer) __p")
+            .fimp("net.fabricmc.fabric.api.event.player.UseItemCallback")
+            .fimp("net.minecraft.world.InteractionHand")
+            .fimp("net.minecraft.world.InteractionResult"),
+    );
+    v.push(
+        b("set_held_model", C::Resources, K::Action,
+            ("Modell des Items ändern", "Change item model"),
+            ("Gibt dem Item in der Haupthand ein anderes Aussehen aus deinem Resourcepack. Leer = wieder normales Aussehen.",
+             "Gives the item in the main hand another look from your resource pack. Empty = normal look again."))
+            .f("model", ("Modell", "Model"), F::ItemModel, "")
+            .i("player", p_player, T::Player, "")
+            .both("Util.setHeldModel(${in:player}, ${s:model});"),
+    );
+    v.push(
+        b("count_custom", C::Resources, K::Value,
+            ("Anzahl eigener Items", "Custom item count"),
+            ("Wie viele Items mit diesem Modell der Spieler im Inventar hat.", "How many items with this model the player has."))
+            .f("model", ("Modell", "Model"), F::ItemModel, "")
+            .i("player", p_player, T::Player, "")
+            .o("count", ("Anzahl", "Count"), T::Number)
+            .bout("count", "Util.countModel(${in:player}, ${s:model})"),
+    );
+    v.push(
+        b("take_custom", C::Resources, K::Action,
+            ("Eigene Items abziehen", "Take custom items"),
+            ("Nimmt dem Spieler Items mit diesem Modell weg – nur wenn er genug hat. „Geklappt“ sagt, ob es funktioniert hat.",
+             "Takes items with this model from the player – only if they have enough. “Worked” tells whether it worked."))
+            .f("model", ("Modell", "Model"), F::ItemModel, "")
+            .i("player", p_player, T::Player, "")
+            .i("amount", ("Anzahl", "Amount"), T::Number, "1")
+            .o("ok", ("Geklappt", "Worked"), T::Bool)
+            .both("final boolean ${out:ok} = Util.takeModel(${in:player}, ${s:model}, ${in:amount});"),
+    );
+    v.push(
+        b("equip_custom", C::Resources, K::Action,
+            ("Eigenes Item anziehen", "Equip custom item"),
+            ("Legt ein Item mit eigenem Modell direkt in einen Ausrüstungsplatz – z. B. einen Hut auf den Kopf.",
+             "Puts an item with a custom model straight into an equipment slot – e.g. a hat on the head."))
+            .f("model", ("Modell", "Model"), F::ItemModel, "")
+            .f("slot", ("Platz", "Slot"), F::Choice(EQUIP_SLOTS), "HEAD")
+            .i("player", p_player, T::Player, "")
+            .i("item", ("Basis-Item", "Base item"), T::Text, "minecraft:paper")
+            .h(("Das Vanilla-Item, das das Modell trägt.", "The vanilla item that carries the model."))
+            .ia("name", ("Name", "Name"), T::Text, "")
+            .both("Util.equipCustom(${in:player}, \"${f:slot}\", ${in:item}, ${s:model}, ${in:name});"),
+    );
+    v.push(
+        b("drop_custom", C::Resources, K::Action,
+            ("Eigenes Item fallen lassen", "Drop custom item"),
+            ("Lässt ein Item mit eigenem Modell an einer Position auf den Boden fallen – z. B. als Belohnung.",
+             "Drops an item with a custom model on the ground at a location – e.g. as a reward."))
+            .f("model", ("Modell", "Model"), F::ItemModel, "")
+            .i("loc", ("Position", "Location"), T::Location, "")
+            .i("item", ("Basis-Item", "Base item"), T::Text, "minecraft:paper")
+            .i("name", ("Name", "Name"), T::Text, "")
+            .ia("amount", ("Anzahl", "Amount"), T::Number, "1")
+            .both("Util.dropCustom(${in:loc}, ${in:item}, ${in:amount}, ${s:model}, ${in:name});"),
+    );
+    v.push(
+        b("ev_pack_status", C::Resources, K::Event,
+            ("Resourcepack-Status", "Resource pack status"),
+            ("Wird ausgelöst, wenn ein Spieler das Resourcepack annimmt, ablehnt oder fertig geladen hat. Nur Paper.",
+             "Fires when a player accepts, declines or has finished loading the resource pack. Paper only."))
+            .o("player", p_player, T::Player)
+            .o("loaded", ("Geladen", "Loaded"), T::Bool)
+            .h(("Ja, sobald das Pack beim Spieler fertig geladen ist.", "Yes once the pack has finished loading for the player."))
+            .o("declined", ("Abgelehnt", "Declined"), T::Bool)
+            .h(("Ja, wenn der Spieler das Pack abgelehnt hat oder der Download fehlschlug.", "Yes if the player declined the pack or the download failed."))
+            .o("status", ("Status", "Status"), T::Text)
+            .h(("Der genaue Status: ACCEPTED, DECLINED, SUCCESSFULLY_LOADED, FAILED_DOWNLOAD …", "The exact status: ACCEPTED, DECLINED, SUCCESSFULLY_LOADED, FAILED_DOWNLOAD …"))
+            .listener("org.bukkit.event.player.PlayerResourcePackStatusEvent", false)
+            .pout("player", "event.getPlayer()")
+            .pout("loaded", "(event.getStatus() == org.bukkit.event.player.PlayerResourcePackStatusEvent.Status.SUCCESSFULLY_LOADED)")
+            .pout("declined", "(event.getStatus() == org.bukkit.event.player.PlayerResourcePackStatusEvent.Status.DECLINED || event.getStatus() == org.bukkit.event.player.PlayerResourcePackStatusEvent.Status.FAILED_DOWNLOAD)")
+            .pout("status", "event.getStatus().name()"),
+    );
+    v.push(
+        b("remove_pack", C::Resources, K::Action,
+            ("Resourcepack entfernen", "Remove resource pack"),
+            ("Nimmt dem Spieler die vom Server geschickten Resourcepacks wieder weg. Nur Paper.",
+             "Removes the resource packs sent by the server from the player again. Paper only."))
+            .i("player", p_player, T::Player, "")
+            .paper("${in:player}.removeResourcePacks();"),
     );
 
     v.into_iter().map(|b| b.0).collect()
@@ -2121,6 +2545,7 @@ pub fn shape(node: &crate::model::Node, project: &crate::model::Project) -> Opti
                     ty: opt_type(o.ty),
                     default: "",
                     advanced: false,
+                    help: None,
                 });
             }
         }
@@ -2139,4 +2564,170 @@ pub fn shape(node: &crate::model::Node, project: &crate::model::Project) -> Opti
 
 pub fn get(id: &str) -> Option<&'static BlockDef> {
     all().iter().find(|b| b.id == id)
+}
+
+
+/// One short sentence about a block's kind, shown on the block.
+pub fn kind_label(k: Kind) -> L {
+    match k {
+        Kind::Event => ("Event", "Event"),
+        Kind::Action => ("Aktion", "Action"),
+        Kind::Flow => ("Ablauf", "Flow"),
+        Kind::Value => ("Wert", "Value"),
+    }
+}
+
+/// Explains what a socket does. Uses the pin's own text if it has one,
+/// otherwise a description derived from the pin id and type.
+pub fn pin_help(def: &BlockDef, pin: &PinDef, is_output: bool) -> String {
+    use crate::i18n::t;
+    if let Some(h) = pin.help {
+        return crate::i18n::tl(h).to_string();
+    }
+    let id: &str = &pin.id;
+    if pin.ty == PinType::Exec {
+        return match (is_output, id, def.kind) {
+            (false, _, _) => t(
+                "Ablauf-Eingang: Der Block läuft, sobald der Ablauf hier ankommt. Verbinde ihn mit dem grünen Pfeil des Blocks davor.",
+                "Flow input: the block runs as soon as the flow arrives here. Connect it to the green arrow of the block before.",
+            ),
+            (true, "next", Kind::Event) => t(
+                "Ablauf-Ausgang: Hier startet alles, was passieren soll, wenn das Event ausgelöst wird.",
+                "Flow output: everything that should happen when the event fires starts here.",
+            ),
+            (true, "next", _) => t(
+                "Ablauf-Ausgang: Danach geht es mit dem hier verbundenen Block weiter.",
+                "Flow output: afterwards the flow continues with the block connected here.",
+            ),
+            (true, "then", _) => t("Läuft, wenn die Bedingung stimmt.", "Runs if the condition is true."),
+            (true, "else", _) => t("Läuft, wenn die Bedingung nicht stimmt.", "Runs if the condition is false."),
+            (true, "body" | "loop" | "each", _) => t(
+                "Läuft bei jedem Durchgang der Wiederholung.",
+                "Runs on every round of the loop.",
+            ),
+            (true, "done", _) => t("Läuft, wenn alles fertig ist.", "Runs when everything is done."),
+            (true, _, _) => t(
+                "Ablauf-Ausgang: Diesen Zweig nimmt der Ablauf in diesem Fall.",
+                "Flow output: the flow takes this branch in that case.",
+            ),
+        }
+        .to_string();
+    }
+    if def.special == Special::Command && is_output && id.starts_with("opt") {
+        return t(
+            "Was der Spieler bei dieser Option des Befehls eingegeben hat. Optionen bearbeitest du im Befehle-Fenster.",
+            "What the player typed for this option of the command. Edit options in the commands window.",
+        )
+        .to_string();
+    }
+    let s = match (is_output, id, pin.ty) {
+        (true, "player", _) if def.kind == Kind::Event => t(
+            "Der Spieler, der das Event ausgelöst hat. Verbinde ihn mit den Spieler-Eingängen anderer Blöcke – oder lass sie frei, dann wird er automatisch benutzt.",
+            "The player who triggered the event. Connect it to player inputs of other blocks – or leave those empty, then it is used automatically.",
+        ),
+        (true, _, PinType::Player) => t(
+            "Ein Spieler als Ergebnis dieses Blocks. Kann leer sein, wenn keiner gefunden wurde.",
+            "A player as the result of this block. Can be empty if none was found.",
+        ),
+        (false, "player", _) => t(
+            "Der Spieler, auf den dieser Block wirkt. Nicht verbunden = der Spieler aus dem Event.",
+            "The player this block acts on. Not connected = the player from the event.",
+        ),
+        (false, "entity", _) => t(
+            "Das Lebewesen, auf das dieser Block wirkt – auch ein Spieler passt hier.",
+            "The entity this block acts on – a player fits here too.",
+        ),
+        (false, "loc", _) => t(
+            "Die Position (Welt + Koordinaten), an der es passiert. Ein Spieler passt auch – dann zählt, wo er steht.",
+            "The location (world + coordinates) where it happens. A player fits too – then where they stand counts.",
+        ),
+        (true, "loc", _) => t(
+            "Die Position (Welt + Koordinaten). Verbinde sie mit Positions-Eingängen, z. B. „Teleportieren“ oder „Position speichern“.",
+            "The location (world + coordinates). Connect it to location inputs, e.g. “Teleport” or “Save location”.",
+        ),
+        (false, "item", PinType::Text) => t(
+            "Die ID eines Items, z. B. minecraft:diamond. Mit der Lupe daneben kannst du alle Items durchsuchen.",
+            "The id of an item, e.g. minecraft:diamond. The magnifier next to it lets you search all items.",
+        ),
+        (false, "block", PinType::Text) => t(
+            "Die ID eines Blocks, z. B. minecraft:stone. Mit der Lupe daneben kannst du alle Blöcke durchsuchen.",
+            "The id of a block, e.g. minecraft:stone. The magnifier next to it lets you search all blocks.",
+        ),
+        (false, "amount" | "count", _) => t("Wie viele es sein sollen.", "How many it should be."),
+        (false, "seconds", _) => t("Dauer in Sekunden (Kommazahlen wie 0.5 gehen auch).", "Duration in seconds (decimals like 0.5 work too)."),
+        (false, "world", _) => t(
+            "Name der Welt, z. B. world, world_nether oder world_the_end.",
+            "Name of the world, e.g. world, world_nether or world_the_end.",
+        ),
+        (false, "key", _) => t(
+            "Der Name, unter dem der Wert gespeichert ist. Derselbe Name liest ihn später wieder.",
+            "The name the value is stored under. The same name reads it again later.",
+        ),
+        (false, "command", _) => t("Der Befehl ohne / am Anfang.", "The command without the leading /."),
+        (false, "text" | "message", _) => t(
+            "Der Text. Farben mit &-Codes: &a grün, &c rot, &e gelb, &l fett.",
+            "The text. Colors with & codes: &a green, &c red, &e yellow, &l bold.",
+        ),
+        (false, "name" | "title" | "subtitle" | "lore" | "header" | "footer", PinType::Text) => t(
+            "Text mit &-Farbcodes: &a grün, &c rot, &e gelb, &l fett.",
+            "Text with & color codes: &a green, &c red, &e yellow, &l bold.",
+        ),
+        (false, "cond" | "condition", _) => t(
+            "Die Bedingung: Ja oder Nein. Verbinde hier z. B. einen Vergleich.",
+            "The condition: yes or no. Connect e.g. a comparison here.",
+        ),
+        (true, "res" | "value" | "result", PinType::Bool) => t(
+            "Das Ergebnis: Ja oder Nein. Passt in „Wenn“ oder andere Ja/Nein-Eingänge.",
+            "The result: yes or no. Fits into “If” or other yes/no inputs.",
+        ),
+        (true, _, PinType::Number) => t(
+            "Eine Zahl als Ergebnis. Passt in Zahl- und Text-Eingänge.",
+            "A number as the result. Fits into number and text inputs.",
+        ),
+        (true, _, PinType::Text) => t(
+            "Ein Text als Ergebnis. Passt in Text-Eingänge (und in Zahl-Eingänge, wenn er eine Zahl ist).",
+            "A text as the result. Fits into text inputs (and number inputs if it is a number).",
+        ),
+        (true, _, PinType::Bool) => t("Ja oder Nein als Ergebnis.", "Yes or no as the result."),
+        (true, _, PinType::Location) => t("Eine Position als Ergebnis.", "A location as the result."),
+        (true, _, _) => t("Ein Wert als Ergebnis dieses Blocks.", "A value produced by this block."),
+        (false, _, PinType::Number) => t(
+            "Eine Zahl. Tippe sie direkt ein oder verbinde einen Zahl-Ausgang.",
+            "A number. Type it in or connect a number output.",
+        ),
+        (false, _, PinType::Text) => t(
+            "Ein Text. Tippe ihn direkt ein oder verbinde einen Ausgang (Zahlen, Spieler und Positionen werden automatisch zu Text).",
+            "A text. Type it in or connect an output (numbers, players and locations turn into text automatically).",
+        ),
+        (false, _, PinType::Bool) => t(
+            "Ja oder Nein. Stelle den Schalter um oder verbinde einen Ja/Nein-Ausgang.",
+            "Yes or no. Flip the switch or connect a yes/no output.",
+        ),
+        (false, _, PinType::Location) => t(
+            "Eine Position. Verbinde einen Positions-Ausgang – oder einen Spieler, dann zählt, wo er steht.",
+            "A location. Connect a location output – or a player, then where they stand counts.",
+        ),
+        (false, _, PinType::Player) => t(
+            "Ein Spieler. Nicht verbunden = der Spieler aus dem Event.",
+            "A player. Not connected = the player from the event.",
+        ),
+        (false, _, _) => t("Ein Wert, den dieser Block braucht.", "A value this block needs."),
+    };
+    s.to_string()
+}
+
+/// What can be plugged into / out of a pin type, for tooltips.
+pub fn accepts(ty: PinType, is_output: bool) -> Vec<PinType> {
+    use PinType::*;
+    [Player, Entity, Text, Number, Bool, Location, Item]
+        .into_iter()
+        .filter(|o| {
+            *o != ty
+                && if is_output {
+                    compatible(ty, *o)
+                } else {
+                    compatible(*o, ty)
+                }
+        })
+        .collect()
 }

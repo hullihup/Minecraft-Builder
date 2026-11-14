@@ -291,6 +291,8 @@ __COMMON__
     /** Inventory holder that marks menus opened by "Open menu". */
     public static final class MenuHolder implements InventoryHolder {
         public final String id;
+        /** Slots whose item may be taken out by the player. */
+        public final java.util.Set<Integer> takeable = new java.util.HashSet<>();
         private Inventory inventory;
 
         MenuHolder(String id) {
@@ -313,8 +315,155 @@ __COMMON__
             if (e == null) continue;
             int slot = (int) num(e[0]);
             if (slot < 0 || slot >= size) continue;
-            inv.setItem(slot, customItem(e[1], 1, "", e[2], e[3]));
+            inv.setItem(slot, customItem(e[1], num(e[4]), e[5], e[2], e[3]));
+            if (e[6].contains("take")) holder.takeable.add(slot);
         }
         p.openInventory(inv);
+    }
+
+    /** Keeps items inside menus unless their slot is marked as takeable. */
+    public static void menuGuard(org.bukkit.event.inventory.InventoryClickEvent event) {
+        if (!(event.getInventory().getHolder() instanceof MenuHolder holder)) return;
+        boolean top = event.getClickedInventory() == event.getView().getTopInventory();
+        if (!top) {
+            // Own inventory: only block moves that would push items into the menu.
+            if (event.isShiftClick() || event.getAction() == org.bukkit.event.inventory.InventoryAction.COLLECT_TO_CURSOR) {
+                event.setCancelled(true);
+            }
+            return;
+        }
+        boolean taking = switch (event.getAction()) {
+            case PICKUP_ALL, PICKUP_HALF, PICKUP_ONE, PICKUP_SOME, MOVE_TO_OTHER_INVENTORY -> true;
+            default -> false;
+        };
+        if (!(taking && holder.takeable.contains(event.getSlot()))) event.setCancelled(true);
+    }
+
+    public static void menuGuard(org.bukkit.event.inventory.InventoryDragEvent event) {
+        if (event.getInventory().getHolder() instanceof MenuHolder) event.setCancelled(true);
+    }
+
+    // ----- locations ------------------------------------------------------------
+
+    /** Location as text for storing: world;x;y;z;yaw;pitch */
+    public static String locToText(Location l) {
+        if (l == null || l.getWorld() == null) return "";
+        return l.getWorld().getName() + ";" + l.getX() + ";" + l.getY() + ";" + l.getZ() + ";" + l.getYaw() + ";" + l.getPitch();
+    }
+
+    /** Reads a stored location, null if there is none. */
+    public static Location locFromText(String s) {
+        if (s == null || s.isEmpty()) return null;
+        String[] p = s.split(";");
+        if (p.length < 4) return null;
+        World w = Bukkit.getWorld(p[0]);
+        if (w == null) return null;
+        try {
+            Location l = new Location(w, Double.parseDouble(p[1]), Double.parseDouble(p[2]), Double.parseDouble(p[3]));
+            if (p.length >= 6) {
+                l.setYaw(Float.parseFloat(p[4]));
+                l.setPitch(Float.parseFloat(p[5]));
+            }
+            return l;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    public static void saveLoc(String key, Location l) {
+        Storage.setText("loc." + key, locToText(l));
+    }
+
+    public static Location loadLoc(String key) {
+        return locFromText(Storage.getText("loc." + key));
+    }
+
+    /** The block the player looks at (or the player's position if there is none in range). */
+    public static Location lookLoc(Player p, double distance) {
+        org.bukkit.block.Block b = p.getTargetBlockExact(Math.max(1, Math.min(120, (int) distance)));
+        return b != null ? b.getLocation() : p.getLocation();
+    }
+
+    /** Middle of the block the location is in. */
+    public static Location blockLoc(Location l) {
+        return new Location(l.getWorld(), l.getBlockX() + 0.5, l.getBlockY(), l.getBlockZ() + 0.5, l.getYaw(), l.getPitch());
+    }
+
+    public static boolean inArea(Location l, Location a, Location b) {
+        if (l == null || a == null || b == null) return false;
+        if (l.getWorld() != a.getWorld() || l.getWorld() != b.getWorld()) return false;
+        return between(l.getX(), a.getX(), b.getX()) && between(l.getY(), a.getY(), b.getY()) && between(l.getZ(), a.getZ(), b.getZ());
+    }
+
+    public static Location spawnLoc(String world) {
+        return world(world).getSpawnLocation();
+    }
+
+    public static Location respawnLoc(Player p) {
+        Location l = p.getRespawnLocation();
+        return l != null ? l : p.getWorld().getSpawnLocation();
+    }
+
+    /** First free spot above the highest block at this x/z. */
+    public static Location surface(Location l) {
+        return l.getWorld().getHighestBlockAt(l).getLocation().add(0.5, 1, 0.5);
+    }
+
+    // ----- more resource pack blocks -------------------------------------------
+
+    /** Model id of an item (custom model if set, otherwise the item id). */
+    public static String modelOf(ItemStack is) {
+        if (is == null || is.getType().isAir()) return "minecraft:air";
+        ItemMeta meta = is.getItemMeta();
+        if (meta != null && meta.hasItemModel()) return meta.getItemModel().toString();
+        return is.getType().getKey().toString();
+    }
+
+    public static void setHeldModel(Player p, String model) {
+        ItemStack is = p.getInventory().getItemInMainHand();
+        if (is.getType().isAir()) return;
+        ItemMeta meta = is.getItemMeta();
+        if (meta == null) return;
+        meta.setItemModel(model == null || model.isBlank() ? null : NamespacedKey.fromString(model.trim().toLowerCase(Locale.ROOT)));
+        is.setItemMeta(meta);
+    }
+
+    public static double countModel(Player p, String model) {
+        int n = 0;
+        for (ItemStack is : p.getInventory().getContents()) {
+            if (is != null && modelOf(is).equalsIgnoreCase(model)) n += is.getAmount();
+        }
+        return n;
+    }
+
+    public static boolean takeModel(Player p, String model, double amount) {
+        int need = Math.max(1, (int) amount);
+        if (countModel(p, model) < need) return false;
+        ItemStack[] all = p.getInventory().getContents();
+        for (int i = 0; i < all.length && need > 0; i++) {
+            ItemStack is = all[i];
+            if (is == null || !modelOf(is).equalsIgnoreCase(model)) continue;
+            int take = Math.min(need, is.getAmount());
+            need -= take;
+            if (take >= is.getAmount()) p.getInventory().setItem(i, null); else is.setAmount(is.getAmount() - take);
+        }
+        return true;
+    }
+
+    public static void equipCustom(Player p, String slot, String id, String model, String name) {
+        org.bukkit.inventory.EquipmentSlot s = switch (slot) {
+            case "CHEST" -> org.bukkit.inventory.EquipmentSlot.CHEST;
+            case "LEGS" -> org.bukkit.inventory.EquipmentSlot.LEGS;
+            case "FEET" -> org.bukkit.inventory.EquipmentSlot.FEET;
+            case "OFFHAND" -> org.bukkit.inventory.EquipmentSlot.OFF_HAND;
+            case "MAINHAND" -> org.bukkit.inventory.EquipmentSlot.HAND;
+            default -> org.bukkit.inventory.EquipmentSlot.HEAD;
+        };
+        p.getInventory().setItem(s, customItem(id, 1, model, name, ""));
+    }
+
+    public static void dropCustom(Location l, String id, double amount, String model, String name) {
+        if (l == null || l.getWorld() == null) return;
+        l.getWorld().dropItemNaturally(l, customItem(id, amount, model, name, ""));
     }
 }

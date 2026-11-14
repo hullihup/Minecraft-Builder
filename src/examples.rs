@@ -12,24 +12,55 @@ pub enum Starter {
     Welcome,
     Counter,
     Kit,
+    Home,
+    Shop,
+    Settings,
+    Wand,
+    Rewards,
+    Protect,
+    Sidebar,
 }
 
 impl Starter {
-    pub const ALL: [Starter; 4] = [
+    pub const ALL: [Starter; 11] = [
         Starter::Empty,
         Starter::Welcome,
-        Starter::Counter,
         Starter::Kit,
+        Starter::Home,
+        Starter::Shop,
+        Starter::Settings,
+        Starter::Counter,
+        Starter::Wand,
+        Starter::Rewards,
+        Starter::Protect,
+        Starter::Sidebar,
     ];
+    /// Templates that work for the platform (some blocks exist only for Paper).
+    pub fn for_platform(p: Platform) -> Vec<Starter> {
+        Self::ALL
+            .into_iter()
+            .filter(|s| s.supports(p))
+            .collect()
+    }
+    pub fn supports(self, p: Platform) -> bool {
+        match self {
+            Starter::Shop | Starter::Sidebar => p == Platform::Paper,
+            _ => true,
+        }
+    }
     pub fn label(self) -> (&'static str, &'static str) {
         match self {
             Starter::Empty => ("Leeres Projekt", "Empty project"),
             Starter::Welcome => ("Willkommensnachricht", "Welcome message"),
-            Starter::Counter => (
-                "/zaehlen-Befehl mit Speicher",
-                "/count command with storage",
-            ),
-            Starter::Kit => ("/kit und /heal Befehle", "/kit and /heal commands"),
+            Starter::Counter => ("Zähler mit Speicher", "Counter with storage"),
+            Starter::Kit => ("/kit und /heal", "/kit and /heal"),
+            Starter::Home => ("/sethome und /home", "/sethome and /home"),
+            Starter::Shop => ("Shop-Menü", "Shop menu"),
+            Starter::Settings => ("Einstellungs-Datei", "Settings file"),
+            Starter::Wand => ("Zauberstab (eigenes Item)", "Magic wand (custom item)"),
+            Starter::Rewards => ("Belohnungen", "Rewards"),
+            Starter::Protect => ("Spawn-Schutz", "Spawn protection"),
+            Starter::Sidebar => ("Scoreboard & Tab-Liste", "Scoreboard & tab list"),
         }
     }
     pub fn desc(self) -> (&'static str, &'static str) {
@@ -40,13 +71,88 @@ impl Starter {
                 "Greets players on join with a message, title and sound.",
             ),
             Starter::Counter => (
-                "Zählt pro Spieler, wie oft der Befehl benutzt wurde – bleibt nach Neustart erhalten.",
-                "Counts per player how often the command was used – survives restarts.",
+                "/zaehlen merkt sich pro Spieler, wie oft er benutzt wurde.",
+                "/count remembers per player how often it was used.",
             ),
             Starter::Kit => (
-                "Ein Starter-Kit-Befehl und ein Heil-Befehl nur für OPs.",
+                "Starter-Kit-Befehl und ein Heil-Befehl nur für OPs.",
                 "A starter kit command and an OP-only heal command.",
             ),
+            Starter::Home => (
+                "Spieler speichern ihre Position und teleportieren sich zurück.",
+                "Players store their location and teleport back to it.",
+            ),
+            Starter::Shop => (
+                "/shop öffnet ein Kisten-Menü; ein Klick tauscht Gold gegen Diamanten.",
+                "/shop opens a chest menu; a click trades gold for diamonds.",
+            ),
+            Starter::Settings => (
+                "Legt einen Ordner mit settings.yml an und liest die Begrüßung daraus.",
+                "Creates a folder with settings.yml and reads the greeting from it.",
+            ),
+            Starter::Wand => (
+                "Ein Item aus deinem Resourcepack, das per Rechtsklick Blitze schießt.",
+                "An item from your resource pack that shoots lightning on right click.",
+            ),
+            Starter::Rewards => (
+                "Belohnt das Abbauen von Diamanterz und das Besiegen von Mobs.",
+                "Rewards mining diamond ore and defeating mobs.",
+            ),
+            Starter::Protect => (
+                "Im Bereich um den Spawn dürfen nur OPs Blöcke abbauen.",
+                "Only OPs may break blocks in the area around spawn.",
+            ),
+            Starter::Sidebar => (
+                "Zeigt jedem Spieler eine Seitenleiste und Text in der Tab-Liste.",
+                "Shows every player a sidebar and text in the tab list.",
+            ),
+        }
+    }
+    /// Short tags shown on the template card.
+    pub fn tags(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Starter::Empty => &[],
+            Starter::Welcome => &[("Events", "Events"), ("Nachrichten", "Messages")],
+            Starter::Counter => &[("Befehl", "Command"), ("Speicher", "Storage")],
+            Starter::Kit => &[("Befehle", "Commands"), ("Items", "Items")],
+            Starter::Home => &[("Befehle", "Commands"), ("Positionen", "Locations")],
+            Starter::Shop => &[("Menü", "Menu"), ("Items", "Items")],
+            Starter::Settings => &[("Dateien", "Files"), ("Einstellungen", "Settings")],
+            Starter::Wand => &[("Resourcepack", "Resource pack"), ("Cooldown", "Cooldown")],
+            Starter::Rewards => &[("Events", "Events"), ("Items", "Items")],
+            Starter::Protect => &[("Positionen", "Locations"), ("Logik", "Logic")],
+            Starter::Sidebar => &[("Scoreboard", "Scoreboard")],
+        }
+    }
+    pub fn icon(self) -> crate::ui::icons::Icon {
+        use crate::ui::icons::Icon as I;
+        match self {
+            Starter::Empty => I::Plus,
+            Starter::Welcome => I::Message,
+            Starter::Counter => I::Database,
+            Starter::Kit => I::Slash,
+            Starter::Home => I::Home,
+            Starter::Shop => I::Chest,
+            Starter::Settings => I::Folder,
+            Starter::Wand => I::Sparkle,
+            Starter::Rewards => I::Star,
+            Starter::Protect => I::Pin,
+            Starter::Sidebar => I::Layers,
+        }
+    }
+    pub fn color(self) -> egui::Color32 {
+        use crate::blocks::Cat as C;
+        match self {
+            Starter::Empty => C::Server.color(),
+            Starter::Welcome => C::Messages.color(),
+            Starter::Counter => C::Data.color(),
+            Starter::Kit => C::Events.color(),
+            Starter::Home | Starter::Protect => C::Location.color(),
+            Starter::Shop => C::Player.color(),
+            Starter::Settings => C::Files.color(),
+            Starter::Wand => C::Resources.color(),
+            Starter::Rewards => C::World.color(),
+            Starter::Sidebar => C::Flow.color(),
         }
     }
 }
@@ -223,6 +329,184 @@ pub fn new_project(name: &str, platform: Platform, starter: Starter) -> Project 
             b.flow(h, heal);
             b.flow(heal, m2);
         }
+        Starter::Home => {
+            let set = b.node("ev_command", 32.0, 32.0, &[("name", "sethome"), ("description", "Speichert dein Zuhause")]);
+            let save = b.node("loc_save", 352.0, 32.0, &[("key", "home")]);
+            let m = b.node("send_message", 672.0, 32.0, &[("text", "&aZuhause gespeichert! Mit &e/home &akommst du zurück.")]);
+            b.flow(set, save);
+            b.flow(save, m);
+            let home = b.node("ev_command", 32.0, 384.0, &[("name", "home"), ("description", "Teleportiert dich nach Hause")]);
+            let load = b.node("loc_load", 352.0, 384.0, &[("key", "home")]);
+            let tp = b.node("teleport", 672.0, 384.0, &[]);
+            let ok = b.node("send_message", 992.0, 384.0, &[("text", "&aWillkommen zu Hause!")]);
+            let no = b.node("send_message", 672.0, 608.0, &[("text", "&cDu hast noch kein Zuhause. Benutze &e/sethome&c.")]);
+            b.flow(home, load);
+            b.link(load, "found", tp, "in");
+            b.link(load, "loc", tp, "loc");
+            b.flow(tp, ok);
+            b.link(load, "missing", no, "in");
+        }
+        Starter::Shop => {
+            let cmd = b.node("ev_command", 32.0, 32.0, &[("name", "shop"), ("description", "Öffnet den Shop")]);
+            let menu = b.node(
+                "open_menu",
+                352.0,
+                32.0,
+                &[
+                    ("menu", "shop"),
+                    ("title", "&8Shop"),
+                    ("rows", "3"),
+                    ("items", "11\tminecraft:diamond\t&bDiamant kaufen\t&7Kostet &65 Goldbarren\t1\t\t\n13\tminecraft:gold_ingot\t&6Dein Gold\t&7Damit bezahlst du\t5\t\t\n15\tminecraft:barrier\t&cSchließen\t\t1\t\t"),
+                ],
+            );
+            b.flow(cmd, menu);
+            let click = b.node("ev_menu_click", 32.0, 480.0, &[("menu", "shop")]);
+            let is_buy = b.node("compare", 32.0, 768.0, &[("b", "11"), ("op", "==")]);
+            let iff = b.node("if", 352.0, 480.0, &[]);
+            let take = b.node("take_items", 672.0, 480.0, &[("item", "minecraft:gold_ingot"), ("amount", "5")]);
+            let paid = b.node("if", 992.0, 480.0, &[]);
+            let give = b.node("give_item", 1312.0, 480.0, &[("item", "minecraft:diamond")]);
+            let ok = b.node("send_message", 1632.0, 480.0, &[("text", "&aGekauft: &b1 Diamant")]);
+            let no = b.node("send_message", 1312.0, 736.0, &[("text", "&cDu brauchst 5 Goldbarren.")]);
+            let is_close = b.node("compare", 352.0, 768.0, &[("b", "15"), ("op", "==")]);
+            let iff2 = b.node("if", 672.0, 800.0, &[]);
+            let close = b.node("close_menu", 992.0, 800.0, &[]);
+            b.link(click, "slot", is_buy, "a");
+            b.link(is_buy, "res", iff, "cond");
+            b.flow(click, iff);
+            b.link(iff, "then", take, "in");
+            b.flow(take, paid);
+            b.link(take, "ok", paid, "cond");
+            b.link(paid, "then", give, "in");
+            b.flow(give, ok);
+            b.link(paid, "else", no, "in");
+            b.link(click, "slot", is_close, "a");
+            b.link(is_close, "res", iff2, "cond");
+            b.link(iff, "else", iff2, "in");
+            b.link(iff2, "then", close, "in");
+        }
+        Starter::Settings => {
+            let s = b.node("ev_start", 32.0, 32.0, &[]);
+            let f = b.node("folder_create", 352.0, 32.0, &[("path", "daten")]);
+            let d1 = b.node(
+                "cfg_default",
+                672.0,
+                32.0,
+                &[
+                    ("file", "settings.yml"),
+                    ("key", "willkommen"),
+                    ("value", "&aWillkommen auf dem Server!"),
+                    ("comment", "Nachricht, die Spieler beim Betreten sehen"),
+                ],
+            );
+            let d2 = b.node(
+                "cfg_default",
+                992.0,
+                32.0,
+                &[
+                    ("file", "settings.yml"),
+                    ("key", "begruessung-aktiv"),
+                    ("value", "true"),
+                    ("comment", "Begrüßung an- oder ausschalten (true/false)"),
+                ],
+            );
+            b.flow(s, f);
+            b.flow(f, d1);
+            b.flow(d1, d2);
+            let j = b.node("ev_join", 32.0, 416.0, &[]);
+            let on = b.node("cfg_bool", 32.0, 640.0, &[("file", "settings.yml"), ("key", "begruessung-aktiv")]);
+            let iff = b.node("if", 352.0, 416.0, &[]);
+            let txt = b.node("cfg_text", 352.0, 672.0, &[("file", "settings.yml"), ("key", "willkommen")]);
+            let m = b.node("send_message", 672.0, 416.0, &[]);
+            b.flow(j, iff);
+            b.link(on, "value", iff, "cond");
+            b.link(iff, "then", m, "in");
+            b.link(txt, "value", m, "text");
+            let r = b.node("ev_command", 32.0, 960.0, &[("name", "einstellungen"), ("description", "Lädt settings.yml neu"), ("op", "true")]);
+            let rl = b.node("cfg_reload", 352.0, 960.0, &[("file", "settings.yml")]);
+            let rm = b.node("send_message", 672.0, 960.0, &[("text", "&aEinstellungen neu geladen.")]);
+            b.flow(r, rl);
+            b.flow(rl, rm);
+        }
+        Starter::Wand => {
+            let c = b.node("ev_command", 32.0, 32.0, &[("name", "zauberstab"), ("description", "Gibt dir den Zauberstab"), ("op", "true")]);
+            let g = b.node("custom_item", 352.0, 32.0, &[("item", "minecraft:stick"), ("name", "&6Zauberstab"), ("lore", "&7Rechtsklick: Blitz")]);
+            b.flow(c, g);
+            let u = b.node("ev_custom_use", 32.0, 448.0, &[]);
+            let cd = b.node("cooldown", 352.0, 448.0, &[("seconds", "3"), ("key", "zauberstab")]);
+            let look = b.node("look_loc", 352.0, 800.0, &[("distance", "40")]);
+            let l = b.node("lightning", 672.0, 448.0, &[]);
+            let w = b.node("actionbar", 672.0, 672.0, &[("text", "&cDer Stab lädt noch auf …")]);
+            b.flow(u, cd);
+            b.link(cd, "ready", l, "in");
+            b.link(look, "loc", l, "loc");
+            b.link(cd, "wait", w, "in");
+            let id = b.p.alloc_id();
+            b.p.workspaces[0].notes.push(crate::model::Note {
+                id,
+                pos: [8.0, -80.0],
+                size: [940.0, 80.0],
+                title: "So geht es weiter".into(),
+                text: "Füge links unter „Texturen & Modelle“ ein Resourcepack hinzu und wähle in beiden Blöcken das Modell des Stabs.".into(),
+                color: 2,
+            });
+        }
+        Starter::Rewards => {
+            let br = b.node("ev_break", 32.0, 32.0, &[]);
+            let eq = b.node("text_equals", 32.0, 352.0, &[("b", "minecraft:diamond_ore")]);
+            let iff = b.node("if", 352.0, 32.0, &[]);
+            let add = b.node("data_add", 672.0, 32.0, &[("key", "diamanten")]);
+            let fmt = b.node("format", 672.0, 352.0, &[("format", "&bDiamant Nr. &e{0}&b – weiter so!")]);
+            let msg = b.node("actionbar", 992.0, 32.0, &[]);
+            b.link(br, "block", eq, "a");
+            b.link(eq, "res", iff, "cond");
+            b.flow(br, iff);
+            b.link(iff, "then", add, "in");
+            b.link(add, "value", fmt, "p0");
+            b.flow(add, msg);
+            b.link(fmt, "res", msg, "text");
+            let k = b.node("ev_kill", 32.0, 736.0, &[]);
+            let ch = b.node("chance", 352.0, 736.0, &[]);
+            let g = b.node("give_item", 672.0, 736.0, &[("item", "minecraft:emerald")]);
+            let m = b.node("send_message", 992.0, 736.0, &[("text", "&aGlück gehabt: +1 Smaragd!")]);
+            b.flow(k, ch);
+            b.link(ch, "then", g, "in");
+            b.flow(g, m);
+        }
+        Starter::Protect => {
+            let br = b.node("ev_break", 32.0, 32.0, &[]);
+            let a = b.node("make_loc", 32.0, 352.0, &[("world", "world"), ("x", "-20"), ("y", "-64"), ("z", "-20")]);
+            let c = b.node("make_loc", 32.0, 640.0, &[("world", "world"), ("x", "20"), ("y", "320"), ("z", "20")]);
+            let area = b.node("loc_in_area", 352.0, 352.0, &[]);
+            let op = b.node("is_op", 352.0, 640.0, &[]);
+            let not = b.node("not", 672.0, 640.0, &[]);
+            let and = b.node("and", 672.0, 352.0, &[]);
+            let iff = b.node("if", 992.0, 32.0, &[]);
+            let cancel = b.node("cancel_event", 1312.0, 32.0, &[]);
+            let msg = b.node("actionbar", 1632.0, 32.0, &[("text", "&cHier darfst du nichts abbauen.")]);
+            b.link(br, "loc", area, "loc");
+            b.link(a, "loc", area, "a");
+            b.link(c, "loc", area, "b");
+            b.link(br, "player", op, "player");
+            b.link(op, "op", not, "a");
+            b.link(area, "res", and, "a");
+            b.link(not, "res", and, "b");
+            b.link(and, "res", iff, "cond");
+            b.flow(br, iff);
+            b.link(iff, "then", cancel, "in");
+            b.flow(cancel, msg);
+        }
+        Starter::Sidebar => {
+            let j = b.node("ev_join", 32.0, 32.0, &[]);
+            let cnt = b.node("online_count", 32.0, 320.0, &[]);
+            let fmt = b.node("format", 352.0, 384.0, &[("format", "&7Willkommen!|&7Online: &a{0}|&7Viel Spaß")]);
+            let sb = b.node("sidebar", 352.0, 32.0, &[("title", "&6&lMein Server")]);
+            let tab = b.node("tablist", 672.0, 32.0, &[]);
+            b.link(cnt, "count", fmt, "p0");
+            b.link(fmt, "res", sb, "lines");
+            b.flow(j, sb);
+            b.flow(sb, tab);
+        }
     }
     p.migrate_commands();
     p
@@ -259,7 +543,11 @@ pub fn test_pack_zip() -> Vec<u8> {
 
 pub fn all_blocks_project(platform: Platform) -> Project {
     let mut p = new_project("Alle Bloecke", platform, Starter::Empty);
-    p.settings.pack.path = "testpack.zip".into();
+    p.settings.pack.packs = vec![crate::model::PackEntry {
+        path: "testpack.zip".into(),
+        enabled: true,
+    }];
+    p.settings.pack.give_command = "testitems".into();
     p.workspaces = vec![Workspace::new("Test")];
     let mut b = Builder { p: &mut p, ws: 0 };
     let defs: Vec<_> = blocks::all()

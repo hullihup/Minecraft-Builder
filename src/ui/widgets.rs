@@ -90,6 +90,14 @@ pub fn field_editor(
                     }
                 });
         }
+        FieldKind::Menu => {
+            let n = crate::ui::menu_editor::parse(&v).len();
+            ui.label(
+                egui::RichText::new(format!("{n} {}", t("Items im Menü", "items in the menu")))
+                    .size(11.5)
+                    .color(theme::TEXT_WEAK),
+            );
+        }
         FieldKind::ItemModel => {
             let models = crate::resourcepack::known_models();
             let shown = if v.is_empty() {

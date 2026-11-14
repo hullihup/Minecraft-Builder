@@ -107,17 +107,30 @@
         return 0;
     }
 
-    /** Parses one menu line "slot: item | name | lore". Returns null if invalid. */
+    /**
+     * Parses one menu line. New format (written by the menu editor), separated by tabs:
+     * slot, item, name, lore, amount, model, flags. Old format: "slot: item | name | lore".
+     * Returns null if invalid, otherwise always 7 entries.
+     */
     public static String[] menuLine(String line) {
-        int colon = line.indexOf(':');
-        if (colon < 0) return null;
-        String slot = line.substring(0, colon).trim();
-        if (!isInt(slot)) return null;
-        String[] parts = line.substring(colon + 1).split("\\|", 3);
-        return new String[] {
-            slot,
-            parts[0].trim(),
-            parts.length > 1 ? parts[1].trim() : "",
-            parts.length > 2 ? parts[2].trim() : ""
-        };
+        String[] out = { "", "", "", "", "1", "", "" };
+        if (line.indexOf('\t') >= 0) {
+            String[] parts = line.split("\t", -1);
+            for (int i = 0; i < parts.length && i < out.length; i++) {
+                if (!parts[i].trim().isEmpty() || i < 4) out[i] = parts[i].trim();
+            }
+        } else {
+            int colon = line.indexOf(':');
+            if (colon < 0) return null;
+            out[0] = line.substring(0, colon).trim();
+            String[] parts = line.substring(colon + 1).split("\\|", 3);
+            for (int i = 0; i < parts.length; i++) out[i + 1] = parts[i].trim();
+        }
+        if (!isInt(out[0]) || out[1].isEmpty()) return null;
+        return out;
+    }
+
+    /** Is the point inside the box between two corners (any order)? */
+    public static boolean between(double v, double a, double b) {
+        return v >= Math.min(a, b) && v <= Math.max(a, b);
     }

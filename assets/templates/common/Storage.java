@@ -73,4 +73,12 @@ public final class Storage {
         DATA.setProperty("t." + key, value == null ? "" : value);
         save();
     }
+
+    public static synchronized boolean hasText(String key) {
+        return DATA.containsKey("t." + key);
+    }
+
+    public static synchronized void removeText(String key) {
+        if (DATA.remove("t." + key) != null) save();
+    }
 }

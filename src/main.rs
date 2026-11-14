@@ -7,8 +7,10 @@ mod build;
 mod codegen;
 mod examples;
 mod i18n;
+mod items;
 mod model;
 mod resourcepack;
+mod server;
 mod theme;
 mod tools;
 mod ui;
@@ -31,6 +33,28 @@ fn main() -> eframe::Result<()> {
     }
     if args.get(1).map(|a| a == "--setup-tools").unwrap_or(false) {
         std::process::exit(tools::setup_cli());
+    }
+    // minecraft-builder --starter <index> <paper|fabric> <out.mcb>: writes a template project (for tests).
+    if args.len() >= 5 && args[1] == "--starter" {
+        let platform = if args[3] == "fabric" {
+            model::Platform::Fabric
+        } else {
+            model::Platform::Paper
+        };
+        let all = examples::Starter::for_platform(platform);
+        let starter = args[2]
+            .parse::<usize>()
+            .ok()
+            .and_then(|i| all.get(i).copied())
+            .unwrap_or(examples::Starter::Welcome);
+        let p = examples::new_project("Vorlage", platform, starter);
+        match p.save(std::path::Path::new(&args[4])) {
+            Ok(()) => std::process::exit(0),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2);
+            }
+        }
     }
     if args.len() >= 4 && (args[1] == "--export" || args[1] == "--selftest") {
         let project = if args[1] == "--export" {

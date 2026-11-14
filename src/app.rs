@@ -38,9 +38,24 @@ pub struct SetupState {
 /// Cached information about the project's resource pack.
 #[derive(Default)]
 pub struct PackCache {
-    pub path: PathBuf,
+    /// What the info was computed for: pack paths, item rules, namespace.
+    pub key: Option<(
+        Vec<PathBuf>,
+        std::collections::BTreeMap<String, crate::model::ItemRule>,
+        String,
+    )>,
     pub info: Option<Result<crate::resourcepack::PackInfo, String>>,
     pub thumbs: HashMap<String, Option<egui::TextureHandle>>,
+}
+
+/// Item textures from a local Minecraft installation (menu editor, item search).
+#[derive(Default)]
+pub struct VanillaCache {
+    /// Looked up once: the client jar, if any.
+    pub jar: Option<Option<PathBuf>>,
+    pub thumbs: HashMap<String, Option<egui::TextureHandle>>,
+    /// Textures decoded in the current frame (kept small so the UI stays smooth).
+    pub loaded_this_frame: usize,
 }
 
 /// Short info about a project file for the start screen.
@@ -127,6 +142,7 @@ pub enum Dialog {
         text: String,
     },
     Updates,
+    Settings,
 }
 
 /// State of the updater.
@@ -218,6 +234,11 @@ pub struct App {
     pub summaries: HashMap<PathBuf, (std::time::SystemTime, Option<ProjectSummary>)>,
     /// Screen rects of UI parts, for the tutorial highlights.
     pub ui_rects: HashMap<&'static str, egui::Rect>,
+    pub vanilla: VanillaCache,
+    pub settings_tab: crate::ui::settings::Tab,
+    pub server_ui: crate::ui::settings::ServerUi,
+    pub menu_edit: Option<crate::ui::menu_editor::MenuEdit>,
+    pub item_picker: Option<crate::ui::menu_editor::ItemPicker>,
     allow_close: bool,
     title: String,
 }
@@ -280,6 +301,11 @@ impl App {
             home_search: String::new(),
             summaries: HashMap::new(),
             ui_rects: HashMap::new(),
+            vanilla: VanillaCache::default(),
+            settings_tab: crate::ui::settings::Tab::General,
+            server_ui: Default::default(),
+            menu_edit: None,
+            item_picker: None,
             allow_close: false,
             title: String::new(),
         };
@@ -352,6 +378,8 @@ impl App {
         self.screen = Screen::Editor;
         self.cmd_draft = None;
         self.show_commands = false;
+        self.menu_edit = None;
+        self.item_picker = None;
         self.refresh_pack(true);
     }
 
@@ -367,7 +395,7 @@ impl App {
         self.summaries.clear();
     }
 
-    /// Reloads the resource pack info if the path changed (or `force`).
+    /// Reloads the resource pack info if the packs or item rules changed (or `force`).
     pub fn refresh_pack(&mut self, force: bool) {
         let s = &self.project.settings.pack;
         if !s.enabled() {
@@ -377,26 +405,38 @@ impl App {
             }
             return;
         }
-        let path = s.resolve(self.path.as_deref());
-        if !force && path == self.pack.path && self.pack.info.is_some() {
+        let ns = crate::resourcepack::namespace_for(&self.project.settings.id);
+        let key = (s.resolve(self.path.as_deref()), s.items.clone(), ns);
+        if !force && self.pack.key.as_ref() == Some(&key) && self.pack.info.is_some() {
             return;
         }
-        let info = crate::resourcepack::inspect(&path);
+        let info = crate::resourcepack::inspect(&key.0, &key.1, &key.2);
         crate::resourcepack::set_known_models(
             info.as_ref()
                 .map(|i| i.item_models.clone())
                 .unwrap_or_default(),
         );
+        // Thumbnails stay valid as long as the pack files are the same.
+        let same_files = self.pack.key.as_ref().map(|k| &k.0) == Some(&key.0) && !force;
+        let thumbs = if same_files {
+            std::mem::take(&mut self.pack.thumbs)
+        } else {
+            HashMap::new()
+        };
         self.pack = PackCache {
-            path,
+            key: Some(key),
             info: Some(info),
-            thumbs: HashMap::new(),
+            thumbs,
         };
     }
 
     /// Adds a resource pack .zip to the project (copied next to the project file).
     pub fn add_pack(&mut self, src: PathBuf) {
-        match crate::resourcepack::inspect(&src) {
+        match crate::resourcepack::inspect(
+            std::slice::from_ref(&src),
+            &Default::default(),
+            "custom",
+        ) {
             Err(e) => {
                 self.dialog = Dialog::Message {
                     title: t("Resourcepack", "Resource pack").into(),
@@ -406,32 +446,141 @@ impl App {
             Ok(info) => {
                 let mut stored = src.display().to_string();
                 if let Some(dir) = self.path.as_ref().and_then(|p| p.parent()) {
-                    let name = format!("{}-resourcepack.zip", self.project.settings.id);
-                    let target = dir.join(&name);
+                    let file = src
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "pack.zip".into());
+                    let rel = format!("resourcepacks/{file}");
+                    let target = dir.join(&rel);
                     if target != src {
-                        match std::fs::copy(&src, &target) {
-                            Ok(_) => stored = name,
+                        match std::fs::create_dir_all(dir.join("resourcepacks"))
+                            .and_then(|_| std::fs::copy(&src, &target))
+                        {
+                            Ok(_) => stored = rel,
                             Err(e) => self.log(
                                 Level::Warn,
                                 format!("Konnte das Pack nicht in den Projektordner kopieren: {e}"),
                             ),
                         }
                     } else {
-                        stored = name;
+                        stored = rel;
                     }
                 }
-                self.project.settings.pack.path = stored;
+                let packs = &mut self.project.settings.pack.packs;
+                if let Some(p) = packs.iter_mut().find(|p| p.path == stored) {
+                    p.enabled = true;
+                } else {
+                    packs.push(crate::model::PackEntry {
+                        path: stored,
+                        enabled: true,
+                    });
+                }
+                let count = packs.len();
                 self.log(
                     Level::Done,
                     format!(
-                        "Resourcepack hinzugefügt: {} Modelle, {} Texturen",
+                        "Resourcepack hinzugefügt: {} Modelle, {} Texturen{}",
                         info.item_models.len(),
-                        info.textures.len()
+                        info.textures.len(),
+                        if count > 1 {
+                            format!(" – {count} Packs werden zu einem zusammengeführt")
+                        } else {
+                            String::new()
+                        }
                     ),
                 );
                 self.refresh_pack(true);
             }
         }
+    }
+
+    /// Thumbnail of a texture inside the project's packs.
+    pub fn pack_thumb(&mut self, ctx: &egui::Context, entry: &str) -> Option<egui::TextureId> {
+        if let Some(h) = self.pack.thumbs.get(entry) {
+            return h.as_ref().map(|h| h.id());
+        }
+        if self.vanilla.loaded_this_frame >= 6 {
+            ctx.request_repaint();
+            return None;
+        }
+        self.vanilla.loaded_this_frame += 1;
+        let handle = match &self.pack.info {
+            Some(Ok(info)) => info
+                .source
+                .get(entry)
+                .and_then(|i| info.packs.get(*i))
+                .and_then(|p| crate::resourcepack::texture_preview(&p.path, entry))
+                .map(|img| {
+                    ctx.load_texture(format!("pack:{entry}"), img, egui::TextureOptions::NEAREST)
+                }),
+            _ => None,
+        };
+        let id = handle.as_ref().map(|h| h.id());
+        self.pack.thumbs.insert(entry.to_string(), handle);
+        id
+    }
+
+    /// Texture for an item: from the resource pack if it has one (custom model or
+    /// replaced vanilla item), otherwise from a local Minecraft installation.
+    pub fn item_texture(
+        &mut self,
+        ctx: &egui::Context,
+        item: &str,
+        model: &str,
+    ) -> Option<egui::TextureId> {
+        let item = item.trim().trim_start_matches("minecraft:");
+        let entry = match &self.pack.info {
+            Some(Ok(info)) => {
+                let by_model = if model.trim().is_empty() {
+                    None
+                } else {
+                    info.texture_of(model.trim())
+                };
+                by_model
+                    .or_else(|| {
+                        if model.trim().is_empty() {
+                            info.texture_of(&format!("minecraft:{item}"))
+                        } else {
+                            None
+                        }
+                    })
+                    .map(str::to_string)
+            }
+            _ => None,
+        };
+        if let Some(e) = entry {
+            if let Some(id) = self.pack_thumb(ctx, &e) {
+                return Some(id);
+            }
+        }
+        if !self.settings.vanilla_textures || item.is_empty() {
+            return None;
+        }
+        if let Some(h) = self.vanilla.thumbs.get(item) {
+            return h.as_ref().map(|h| h.id());
+        }
+        let jar = self
+            .vanilla
+            .jar
+            .get_or_insert_with(|| {
+                let custom = self.settings.minecraft_jar.trim();
+                if !custom.is_empty() && std::path::Path::new(custom).is_file() {
+                    Some(PathBuf::from(custom))
+                } else {
+                    crate::resourcepack::find_minecraft_jar()
+                }
+            })
+            .clone()?;
+        if self.vanilla.loaded_this_frame >= 6 {
+            ctx.request_repaint();
+            return None;
+        }
+        self.vanilla.loaded_this_frame += 1;
+        let handle = crate::resourcepack::vanilla_preview(&jar, item)
+            .map(|img| ctx.load_texture(format!("mc:{item}"), img, egui::TextureOptions::NEAREST));
+        let id = handle.as_ref().map(|h| h.id());
+        self.vanilla.thumbs.insert(item.to_string(), handle);
+        id
     }
 
     /// Loads the project summaries for the start screen.
@@ -996,7 +1145,12 @@ impl App {
             return;
         }
         if self.path.is_none() || self.dirty() {
-            if !self.save(false) {
+            if self.path.is_some() && !self.settings.autosave_on_build {
+                // Ask where to save instead of overwriting silently.
+                if !self.save(true) {
+                    return;
+                }
+            } else if !self.save(false) {
                 return;
             }
         }
@@ -1027,11 +1181,19 @@ impl App {
             },
         );
         self.job_export_only = export_only;
+        let server = if export_only {
+            None
+        } else {
+            self.settings
+                .server(self.project.settings.deploy_server)
+                .cloned()
+        };
         self.job = Some(build::start(
             self.project.clone(),
             self.path.clone(),
             dir,
             !export_only,
+            server,
             ctx.clone(),
         ));
     }
@@ -1226,7 +1388,9 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.vanilla.loaded_this_frame = 0;
         self.poll_jobs();
+        ui::settings::poll(self, &ctx);
         self.poll_setup();
         self.poll_update(&ctx);
         if self.update.checking || self.update.downloading {
@@ -1276,6 +1440,8 @@ impl eframe::App for App {
         if self.show_commands {
             ui::commands::show(self, &ctx);
         }
+        ui::menu_editor::show(self, &ctx);
+        ui::menu_editor::item_picker(self, &ctx);
         ui::onboarding::show(self, &ctx);
         ui::onboarding::tutorial(self, &ctx);
 
