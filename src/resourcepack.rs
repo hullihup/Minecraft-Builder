@@ -727,50 +727,6 @@ pub fn find_minecraft_jar() -> Option<PathBuf> {
     jars.pop().map(|j| j.1)
 }
 
-/// Texture of a vanilla item from a Minecraft client jar on this computer.
-pub fn vanilla_preview(jar: &Path, item: &str) -> Option<egui::ColorImage> {
-    let file = std::fs::File::open(jar).ok()?;
-    let mut zip = zip::ZipArchive::new(file).ok()?;
-    let candidates = [
-        format!("assets/minecraft/textures/item/{item}.png"),
-        format!("assets/minecraft/textures/block/{item}.png"),
-        format!("assets/minecraft/textures/block/{item}_front.png"),
-        format!("assets/minecraft/textures/block/{item}_side.png"),
-        format!("assets/minecraft/textures/block/{item}_top.png"),
-        format!(
-            "assets/minecraft/textures/block/{}.png",
-            item.trim_end_matches("_block")
-        ),
-        format!(
-            "assets/minecraft/textures/block/{}s.png",
-            item.trim_end_matches("_slab").trim_end_matches("_stairs").trim_end_matches("_wall")
-        ),
-        format!(
-            "assets/minecraft/textures/block/{}.png",
-            item.trim_end_matches("_slab").trim_end_matches("_stairs").trim_end_matches("_wall")
-        ),
-        format!(
-            "assets/minecraft/textures/block/{}_planks.png",
-            item.trim_end_matches("_slab")
-                .trim_end_matches("_stairs")
-                .trim_end_matches("_fence")
-                .trim_end_matches("_button")
-                .trim_end_matches("_pressure_plate")
-        ),
-    ];
-    for c in candidates {
-        if let Ok(mut f) = zip.by_name(&c) {
-            let mut data = vec![];
-            if f.read_to_end(&mut data).is_ok() {
-                if let Some(img) = png_preview(&data) {
-                    return Some(img);
-                }
-            }
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -449,9 +449,10 @@ pub struct AppSettings {
     /// Use item textures from a Minecraft installation on this computer in the menu editor.
     #[serde(default = "default_true")]
     pub vanilla_textures: bool,
-    /// Minecraft client .jar for those textures (empty = find automatically).
-    #[serde(default)]
-    pub minecraft_jar: String,
+    /// Vanilla textures and models: a template resource pack (.zip) or the
+    /// Minecraft client .jar (empty = look for an installed Minecraft).
+    #[serde(default, alias = "minecraft_jar")]
+    pub texture_source: String,
     /// Save the project automatically before building.
     #[serde(default = "default_true")]
     pub autosave_on_build: bool,
@@ -483,7 +484,7 @@ impl Default for AppSettings {
             pin_types: true,
             wire_flow: true,
             vanilla_textures: true,
-            minecraft_jar: String::new(),
+            texture_source: String::new(),
             autosave_on_build: true,
             servers: vec![],
             next_server_id: 1,
@@ -491,7 +492,7 @@ impl Default for AppSettings {
     }
 }
 
-fn config_dir() -> PathBuf {
+pub fn config_dir() -> PathBuf {
     let base = if cfg!(windows) {
         std::env::var_os("APPDATA").map(PathBuf::from)
     } else {
@@ -529,6 +530,15 @@ impl AppSettings {
         if let Ok(s) = serde_json::to_string_pretty(self) {
             let _ = std::fs::write(dir.join("settings.json"), s);
         }
+    }
+    /// The zip/jar the vanilla item pictures come from, if any.
+    pub fn vanilla_source(&self) -> Option<PathBuf> {
+        let custom = self.texture_source.trim();
+        if !custom.is_empty() {
+            let p = PathBuf::from(custom);
+            return p.is_file().then_some(p);
+        }
+        crate::resourcepack::find_minecraft_jar()
     }
     pub fn server(&self, id: u64) -> Option<&crate::server::ServerConfig> {
         self.servers.iter().find(|s| s.id == id && id != 0)

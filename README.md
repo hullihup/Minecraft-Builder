@@ -20,7 +20,7 @@ Komplett in **Rust** geschrieben (egui), läuft als einzelne **`.exe` unter Wind
   - **Paper**: Das Pack wird ins Plugin eingebaut; das Plugin liefert es über einen kleinen eingebauten Webserver aus und schickt es Spielern beim Betreten automatisch (Port, Pflicht, Text einstellbar).
   - **Fabric**: Texturen und Modelle werden direkt in den Mod eingebaut.
   - Blöcke: **„Eigenes Item geben“**, **„Rechtsklick mit eigenem Item“**, **„Modell des Items ändern“**, **„Eigenes Item anziehen / fallen lassen“**, **„Eigene Items zählen / abziehen“**, **„Resourcepack-Status“**, **„Resourcepack senden / entfernen“**. Fehlende `items/*.json`-Definitionen werden automatisch erzeugt.
-- **Menü-Editor**: Der Block „Menü öffnen“ hat den Knopf **„Menü bearbeiten“**. Im Editor stellst du Reihen und Titel ein und siehst die Kiste **wie in Minecraft**. Klick auf einen Platz öffnet die **Item-Suche über alle 1500 Items und Blöcke**; pro Platz gibt es Name, Beschreibung, Anzahl, eigenes Modell und den Schalter **„Kann herausgenommen werden“**. Items lassen sich per Ziehen verschieben. Texturen kommen aus deinem Resourcepack, sonst aus einem auf dem Computer installierten Minecraft (sonst Platzhalter-Bilder).
+- **Menü-Editor**: Der Block „Menü öffnen“ hat den Knopf **„Menü bearbeiten“**. Im Editor stellst du Reihen und Titel ein und siehst die Kiste **wie in Minecraft**. Klick auf einen Platz öffnet die **Item-Suche über alle 1500 Items und Blöcke**; pro Platz gibt es Name, Beschreibung, Anzahl, eigenes Modell und den Schalter **„Kann herausgenommen werden“**. Items lassen sich per Ziehen verschieben. Items werden **wie im Inventar** gezeichnet: Blöcke als 3D-Würfel (aus ihren Block-Modellen, auch Treppen, Stufen, Zäune, Glas, Laub mit Farbe), Items flach, Truhen, Köpfe, Shulker-Kisten, Banner und Schilde aus ihren Entity-Texturen. Texturen und Modelle kommen aus deinem Resourcepack und aus einem **Minecraft-Texturen-Pack** (Vanilla-Template-.zip, unter Einstellungen → Darstellung wählen) oder der Minecraft-.jar auf dem Computer; ohne beides gibt es Platzhalter-Bilder. Items, die das Texturen-Pack kennt, aber die eingebaute Liste nicht (neuere Versionen), erscheinen automatisch in der Suche. Minecraft-Dateien werden nicht mit dem Builder ausgeliefert.
 - **Positionen**: „Position holen“ (Koordinaten + Welt), „Position speichern / laden / löschen“, „Position im Blick“, „Blockmitte“, „In Bereich?“, „Welt-Spawn“, „Bett / Respawn-Punkt“, „Oberfläche“.
 - **Dateien & Einstellungen**: „Ordner erstellen“ (in `plugins/<Name>/` bzw. `config/<id>/`), „Einstellung anlegen / lesen / ändern / neu laden“ für eigene `settings.yml`-Dateien, „Datei schreiben / lesen / löschen“, „Zeile anhängen“, „Dateien im Ordner“.
 - **Server-Upload**: Unter Einstellungen → Server die Adresse deines **Calagopus-Panels** eingeben – der Browser öffnet die Seite „API-Key erstellen“, der kopierte Key wird automatisch übernommen, dann nur noch den Server wählen. Nach jedem Build landet die `.jar` automatisch in `plugins/` bzw. `mods/` (alte Versionen werden entfernt; optional Neustart oder Konsolenbefehl danach).
@@ -104,6 +104,7 @@ Für alte Grafiktreiber gibt es einen OpenGL-Build: `cargo build --release --no-
 | `src/resourcepack.rs` | Resourcepacks lesen, zusammenführen, Item-Regeln anwenden |
 | `src/server.rs` | Upload auf den Server (Calagopus-Panel) |
 | `src/items.rs` | Liste aller Items und Blöcke für die Suche |
+| `src/item_render.rs` | Zeichnet Items wie im Inventar (3D-Blöcke, flache Items) aus Pack-Modellen |
 | `src/ui/` | Oberfläche: Canvas, Seitenleisten, Inspector, Konsole, Dialoge |
 | `assets/templates/` | Java-Hilfsklassen, die in jedes Plugin/jeden Mod kommen |
 
@@ -115,6 +116,7 @@ minecraft-builder --export projekt.mcb ausgabe/     # nur exportieren
 minecraft-builder --selftest paper|fabric ausgabe/  # Testprojekt mit allen Blöcken
 minecraft-builder --setup-tools                     # Java & Gradle einrichten (nutzt der Installer)
 minecraft-builder --lang de|en                      # Sprache setzen (nutzt der Installer)
+minecraft-builder --render-item pack.zip ausgabe/ stone chest   # Item-Bilder als PNG
 ```
 
 Nicht offiziell von Mojang oder Microsoft. Die Item-Liste (`assets/items.txt`) stammt aus dem offenen Projekt [minecraft-data](https://github.com/PrismarineJS/minecraft-data) (MIT-Lizenz). Die Oberfläche ist von node-basierten Bot-Buildern wie XC Circuit inspiriert, der Code ist eigenständig.

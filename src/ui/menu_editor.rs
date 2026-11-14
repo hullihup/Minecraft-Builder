@@ -1000,6 +1000,9 @@ pub fn item_picker(app: &mut App, ctx: &egui::Context) {
     };
     let mut picked: Option<(String, String)> = None;
     let mut close = false;
+    let mut pick_textures = false;
+    app.ensure_renderer();
+    let extra = app.vanilla.extra_items.clone();
 
     let modal = egui::Modal::new(Id::unique("item_picker"))
         .frame(
@@ -1093,6 +1096,26 @@ pub fn item_picker(app: &mut App, ctx: &egui::Context) {
                         i.name.to_string(),
                     )
                 }));
+                // Newer items that only the texture pack knows.
+                let words: Vec<String> = query
+                    .trim()
+                    .to_lowercase()
+                    .replace("minecraft:", "")
+                    .split([' ', '_'])
+                    .filter(|w| !w.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                v.extend(
+                    extra
+                        .iter()
+                        .filter(|(_, block)| match filter {
+                            items::Filter::Items => !block,
+                            items::Filter::Blocks => *block,
+                            items::Filter::All => true,
+                        })
+                        .filter(|(id, _)| words.iter().all(|w| id.contains(w.as_str())))
+                        .map(|(id, _)| (format!("minecraft:{id}"), String::new(), items::display_name(id))),
+                );
                 v
             };
             let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -1103,7 +1126,7 @@ pub fn item_picker(app: &mut App, ctx: &egui::Context) {
             }
 
             let cell_w = 102.0_f32;
-            let cell = 78.0_f32;
+            let cell = 84.0_f32;
             let cols = 6usize;
             let n_rows = entries.len().div_ceil(cols);
             ui.label(
@@ -1165,8 +1188,8 @@ pub fn item_picker(app: &mut App, ctx: &egui::Context) {
                                             );
                                         }
                                         let icon = Rect::from_center_size(
-                                            pos2(inner.center().x, inner.top() + 27.0),
-                                            vec2(38.0, 38.0),
+                                            pos2(inner.center().x, inner.top() + 28.0),
+                                            vec2(48.0, 48.0),
                                         );
                                         draw_item(app, ui, icon, item, model);
                                         // Name below the picture.
@@ -1204,24 +1227,38 @@ pub fn item_picker(app: &mut App, ctx: &egui::Context) {
                         });
                 });
             ui.add_space(6.0);
-            ui.label(
-                RichText::new(if app.vanilla.jar.clone().flatten().is_some() || !app.settings.vanilla_textures {
-                    t(
-                        "Enter nimmt den ersten Treffer. Texturen aus deinem Resourcepack haben Vorrang.",
-                        "Enter takes the first result. Textures from your resource pack come first.",
-                    )
-                } else {
-                    t(
-                        "Enter nimmt den ersten Treffer. Ohne installiertes Minecraft werden Platzhalter-Bilder gezeigt (Einstellungen → Darstellung).",
-                        "Enter takes the first result. Without an installed Minecraft, stand-in pictures are shown (Settings → Appearance).",
-                    )
-                })
-                .size(11.0)
-                .color(theme::TEXT_WEAK),
-            );
+            let has_textures = app.vanilla.vanilla.is_some();
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(if has_textures || !app.settings.vanilla_textures {
+                        t(
+                            "Enter nimmt den ersten Treffer. Texturen aus deinem Resourcepack haben Vorrang.",
+                            "Enter takes the first result. Textures from your resource pack come first.",
+                        )
+                    } else {
+                        t(
+                            "Ohne Minecraft-Texturen werden Platzhalter gezeigt.",
+                            "Without Minecraft textures, stand-ins are shown.",
+                        )
+                    })
+                    .size(11.0)
+                    .color(theme::TEXT_WEAK),
+                );
+                if !has_textures && app.settings.vanilla_textures {
+                    if ui
+                        .small_button(t("Texturen-Pack wählen…", "Pick texture pack…"))
+                        .clicked()
+                    {
+                        pick_textures = true;
+                    }
+                }
+            });
         });
     if modal.should_close() {
         close = true;
+    }
+    if pick_textures {
+        app.pick_texture_source();
     }
     if let Some((item, model)) = picked {
         apply_pick(app, &target, item, model);

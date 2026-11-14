@@ -48,17 +48,21 @@ pub struct PackCache {
     pub thumbs: HashMap<String, Option<egui::TextureHandle>>,
 }
 
-/// Item textures from a local Minecraft installation (menu editor, item search).
+/// Item pictures (menu editor, item search, block previews), drawn by `item_render`.
 #[derive(Default)]
 pub struct VanillaCache {
-    /// Looked up once: the client jar, if any.
-    pub jar: Option<Option<PathBuf>>,
+    /// Files the renderer was made for: project packs, then the vanilla source.
+    pub key: Option<Vec<PathBuf>>,
+    pub renderer: Option<crate::item_render::Renderer>,
+    /// The vanilla source in use (template pack or Minecraft .jar), if any.
+    pub vanilla: Option<PathBuf>,
     pub thumbs: HashMap<String, Option<egui::TextureHandle>>,
-    /// Textures decoded in the current frame (kept small so the UI stays smooth).
+    /// Items of the texture source that the built-in item list does not know: (id, is block).
+    pub extra_items: Vec<(String, bool)>,
+    /// Pictures made in the current frame (kept small so the UI stays smooth).
     pub loaded_this_frame: usize,
 }
 
-/// Short info about a project file for the start screen.
 #[derive(Clone)]
 pub struct ProjectSummary {
     pub name: String,
@@ -520,67 +524,127 @@ impl App {
         id
     }
 
-    /// Texture for an item: from the resource pack if it has one (custom model or
-    /// replaced vanilla item), otherwise from a local Minecraft installation.
+    /// Makes sure the item renderer reads the current packs and vanilla source.
+    pub fn ensure_renderer(&mut self) {
+        let vanilla = if self.settings.vanilla_textures {
+            self.settings.vanilla_source()
+        } else {
+            None
+        };
+        let mut key = self.project.settings.pack.resolve(self.path.as_deref());
+        key.extend(vanilla.clone());
+        if self.vanilla.key.as_ref() != Some(&key) {
+            let r = crate::item_render::Renderer::new(&key);
+            self.vanilla.extra_items = r
+                .vanilla_items()
+                .into_iter()
+                .filter(|(id, _)| crate::items::get(id).is_none())
+                .collect();
+            self.vanilla.renderer = Some(r);
+            self.vanilla.key = Some(key);
+            self.vanilla.vanilla = vanilla;
+            self.vanilla.thumbs.clear();
+        }
+    }
+
+    /// Forgets all item pictures (after the texture settings changed).
+    pub fn reset_item_pictures(&mut self) {
+        self.vanilla.key = None;
+        self.vanilla.renderer = None;
+        self.vanilla.thumbs.clear();
+    }
+
+    /// Picture of an item like in the inventory: blocks as 3D cubes, items flat.
+    /// A custom model (resource pack) is used if given.
     pub fn item_texture(
         &mut self,
         ctx: &egui::Context,
         item: &str,
         model: &str,
     ) -> Option<egui::TextureId> {
-        let item = item.trim().trim_start_matches("minecraft:");
-        let entry = match &self.pack.info {
-            Some(Ok(info)) => {
-                let by_model = if model.trim().is_empty() {
-                    None
-                } else {
-                    info.texture_of(model.trim())
-                };
-                by_model
-                    .or_else(|| {
-                        if model.trim().is_empty() {
-                            info.texture_of(&format!("minecraft:{item}"))
-                        } else {
-                            None
-                        }
-                    })
-                    .map(str::to_string)
-            }
-            _ => None,
+        let item = item.trim();
+        let model = model.trim();
+        let key = if model.is_empty() {
+            item.to_string()
+        } else {
+            format!("{item}|{model}")
         };
-        if let Some(e) = entry {
-            if let Some(id) = self.pack_thumb(ctx, &e) {
-                return Some(id);
-            }
-        }
-        if !self.settings.vanilla_textures || item.is_empty() {
+        if key.is_empty() {
             return None;
         }
-        if let Some(h) = self.vanilla.thumbs.get(item) {
+        self.ensure_renderer();
+        if let Some(h) = self.vanilla.thumbs.get(&key) {
             return h.as_ref().map(|h| h.id());
         }
-        let jar = self
-            .vanilla
-            .jar
-            .get_or_insert_with(|| {
-                let custom = self.settings.minecraft_jar.trim();
-                if !custom.is_empty() && std::path::Path::new(custom).is_file() {
-                    Some(PathBuf::from(custom))
-                } else {
-                    crate::resourcepack::find_minecraft_jar()
-                }
-            })
-            .clone()?;
-        if self.vanilla.loaded_this_frame >= 6 {
+        if self.vanilla.loaded_this_frame >= 16 {
             ctx.request_repaint();
             return None;
         }
         self.vanilla.loaded_this_frame += 1;
-        let handle = crate::resourcepack::vanilla_preview(&jar, item)
-            .map(|img| ctx.load_texture(format!("mc:{item}"), img, egui::TextureOptions::NEAREST));
+        let r = self.vanilla.renderer.as_mut()?;
+        let img = (!model.is_empty())
+            .then(|| r.render(model))
+            .flatten()
+            .or_else(|| r.render(item));
+        let handle = img.map(|img| {
+            ctx.load_texture(format!("item:{key}"), img, egui::TextureOptions::NEAREST)
+        });
         let id = handle.as_ref().map(|h| h.id());
-        self.vanilla.thumbs.insert(item.to_string(), handle);
+        self.vanilla.thumbs.insert(key, handle);
         id
+    }
+
+    /// Lets the user pick the vanilla textures (template pack .zip or Minecraft .jar).
+    /// A .zip is copied into the app's settings folder so it stays available.
+    pub fn pick_texture_source(&mut self) {
+        let Some(src) = rfd::FileDialog::new()
+            .add_filter(t("Texturen-Pack oder Minecraft", "Texture pack or Minecraft"), &["zip", "jar"])
+            .set_title(t("Minecraft-Texturen wählen", "Pick Minecraft textures"))
+            .pick_file()
+        else {
+            return;
+        };
+        self.set_texture_source(src);
+    }
+
+    pub fn set_texture_source(&mut self, src: PathBuf) {
+        if !crate::item_render::is_vanilla_source(&src) {
+            self.dialog = Dialog::Message {
+                title: t("Keine Minecraft-Texturen", "No Minecraft textures").into(),
+                text: t(
+                    "In dieser Datei fehlen die Block-Modelle und Texturen von Minecraft (assets/minecraft/models/block, textures/block). Nimm ein vollständiges Vanilla-Template-Pack für deine Minecraft-Version oder die Minecraft-.jar aus .minecraft/versions.",
+                    "This file lacks Minecraft's block models and textures (assets/minecraft/models/block, textures/block). Use a complete vanilla template pack for your Minecraft version or the Minecraft .jar from .minecraft/versions.",
+                )
+                .into(),
+            };
+            return;
+        }
+        let mut stored = src.clone();
+        if src
+            .extension()
+            .map(|e| e.eq_ignore_ascii_case("zip"))
+            .unwrap_or(false)
+        {
+            let dir = build::config_dir().join("textures");
+            let target = dir.join(src.file_name().unwrap_or_default());
+            if target != src {
+                match std::fs::create_dir_all(&dir).and_then(|_| std::fs::copy(&src, &target)) {
+                    Ok(_) => stored = target,
+                    Err(e) => self.log(
+                        Level::Warn,
+                        format!("Konnte das Texturen-Pack nicht kopieren, es wird vom alten Ort gelesen: {e}"),
+                    ),
+                }
+            }
+        }
+        self.settings.texture_source = stored.display().to_string();
+        self.settings.vanilla_textures = true;
+        self.settings.save();
+        self.reset_item_pictures();
+        self.log(
+            Level::Done,
+            format!("Minecraft-Texturen: {}", stored.display()),
+        );
     }
 
     /// Loads the project summaries for the start screen.

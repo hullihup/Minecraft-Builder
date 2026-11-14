@@ -7,6 +7,7 @@ mod build;
 mod codegen;
 mod examples;
 mod i18n;
+mod item_render;
 mod items;
 mod model;
 mod resourcepack;
@@ -33,6 +34,24 @@ fn main() -> eframe::Result<()> {
     }
     if args.get(1).map(|a| a == "--setup-tools").unwrap_or(false) {
         std::process::exit(tools::setup_cli());
+    }
+    // minecraft-builder --render-item <pack.zip> <out-dir> <id>...: item pictures as PNG (for tests).
+    if args.len() >= 5 && args[1] == "--render-item" {
+        let mut r = item_render::Renderer::new(&[PathBuf::from(&args[2])]);
+        let dir = PathBuf::from(&args[3]);
+        let _ = std::fs::create_dir_all(&dir);
+        for id in &args[4..] {
+            match r.render(id) {
+                Some(img) => {
+                    let raw: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
+                    let out = image::RgbaImage::from_raw(img.size[0] as u32, img.size[1] as u32, raw).unwrap();
+                    let name = id.replace(':', "_");
+                    let _ = out.save(dir.join(format!("{name}.png")));
+                }
+                None => eprintln!("{id}: nothing to draw"),
+            }
+        }
+        std::process::exit(0);
     }
     // minecraft-builder --starter <index> <paper|fabric> <out.mcb>: writes a template project (for tests).
     if args.len() >= 5 && args[1] == "--starter" {

@@ -391,65 +391,98 @@ fn appearance(app: &mut App, ui: &mut Ui) {
     hint(
         ui,
         t(
-            "Im Menü-Editor und in der Item-Suche werden echte Texturen gezeigt: zuerst die aus deinem Resourcepack, sonst die aus einem auf diesem Computer installierten Minecraft. Es werden keine Minecraft-Dateien mit dem Builder ausgeliefert.",
-            "The menu editor and the item search show real textures: first those from your resource pack, otherwise those from a Minecraft installed on this computer. No Minecraft files ship with the builder.",
+            "Item-Suche, Menü-Editor und Block-Vorschau zeigen Items wie im Inventar: Blöcke als 3D-Würfel, Items flach. Die Texturen und Modelle kommen aus deinem Resourcepack und aus einem Minecraft-Texturen-Pack (Vanilla-Template .zip) oder der Minecraft-.jar auf diesem Computer. Der Builder selbst liefert keine Minecraft-Dateien mit.",
+            "The item search, menu editor and block previews show items like the inventory: blocks as 3D cubes, items flat. Textures and models come from your resource pack and from a Minecraft texture pack (vanilla template .zip) or the Minecraft .jar on this computer. The builder itself ships no Minecraft files.",
         ),
     );
     ui.add_space(8.0);
     if option(
         ui,
         &mut app.settings.vanilla_textures,
-        t("Texturen aus installiertem Minecraft benutzen", "Use textures from an installed Minecraft"),
-        "",
+        t("Minecraft-Texturen benutzen", "Use Minecraft textures"),
+        t("Aus: Platzhalter-Bilder statt Texturen.", "Off: stand-in pictures instead of textures."),
     ) {
-        app.vanilla = Default::default();
+        app.reset_item_pictures();
     }
-    let found = if app.settings.minecraft_jar.trim().is_empty() {
-        crate::resourcepack::find_minecraft_jar()
-    } else {
-        Some(std::path::PathBuf::from(app.settings.minecraft_jar.trim())).filter(|p| p.is_file())
-    };
-    ui.horizontal(|ui| {
-        match &found {
-            Some(p) => {
-                ui.label(RichText::new("✔").color(theme::GREEN));
-                ui.label(RichText::new(p.display().to_string()).size(11.5));
-            }
-            None => {
-                ui.label(RichText::new("⚠").color(theme::YELLOW));
-                ui.label(
-                    RichText::new(t(
-                        "Kein Minecraft gefunden – es werden Platzhalter-Bilder gezeigt.",
-                        "No Minecraft found – stand-in pictures are shown.",
-                    ))
-                    .size(11.5),
-                );
-            }
-        }
-    });
+    let custom = !app.settings.texture_source.trim().is_empty();
+    let found = app.settings.vanilla_source();
+    egui::Frame::new()
+        .fill(Color32::from_rgb(0x26, 0x28, 0x2D))
+        .stroke(Stroke::new(1.0, theme::BORDER))
+        .corner_radius(8)
+        .inner_margin(10)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                match &found {
+                    Some(p) => {
+                        ui.label(RichText::new("✔").color(theme::GREEN));
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 1.0;
+                            ui.label(
+                                RichText::new(
+                                    p.file_name()
+                                        .map(|n| n.to_string_lossy().to_string())
+                                        .unwrap_or_default(),
+                                )
+                                .strong(),
+                            );
+                            ui.label(
+                                RichText::new(if custom {
+                                    t("Ausgewähltes Texturen-Pack", "Selected texture pack")
+                                } else {
+                                    t("Installiertes Minecraft (automatisch gefunden)", "Installed Minecraft (found automatically)")
+                                })
+                                .size(11.0)
+                                .color(theme::TEXT_WEAK),
+                            );
+                        });
+                    }
+                    None => {
+                        ui.label(RichText::new("⚠").color(theme::YELLOW));
+                        ui.label(
+                            RichText::new(if custom {
+                                t("Das ausgewählte Texturen-Pack gibt es nicht mehr.", "The selected texture pack no longer exists.")
+                            } else {
+                                t("Keine Minecraft-Texturen – es werden Platzhalter gezeigt.", "No Minecraft textures – stand-ins are shown.")
+                            })
+                            .size(12.0),
+                        );
+                    }
+                }
+            });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if icons::styled_button(
+                    ui,
+                    Some(Icon::Folder),
+                    t("Texturen-Pack wählen…", "Pick texture pack…"),
+                    Some((theme::ACCENT, Color32::BLACK)),
+                )
+                .clicked()
+                {
+                    app.pick_texture_source();
+                }
+                if custom
+                    && ui
+                        .button(t("Automatisch suchen", "Find automatically"))
+                        .on_hover_text(t(
+                            "Statt des Packs die Minecraft-.jar aus .minecraft/versions benutzen",
+                            "Use the Minecraft .jar from .minecraft/versions instead of the pack",
+                        ))
+                        .clicked()
+                {
+                    app.settings.texture_source.clear();
+                    app.reset_item_pictures();
+                }
+            });
+        });
     ui.add_space(6.0);
-    ui.label(RichText::new(t("Minecraft-.jar selbst wählen (optional)", "Pick the Minecraft .jar yourself (optional)")).size(12.0));
-    ui.horizontal(|ui| {
-        let before = app.settings.minecraft_jar.clone();
-        ui.add(
-            egui::TextEdit::singleline(&mut app.settings.minecraft_jar)
-                .hint_text(t("(automatisch suchen)", "(find automatically)"))
-                .desired_width(ui.available_width() - 40.0),
-        );
-        if icons::icon_button(ui, Icon::Folder, 26.0, t("Datei wählen", "Pick file")).clicked() {
-            if let Some(f) = rfd::FileDialog::new().add_filter("Minecraft", &["jar"]).pick_file() {
-                app.settings.minecraft_jar = f.display().to_string();
-            }
-        }
-        if before != app.settings.minecraft_jar {
-            app.vanilla = Default::default();
-        }
-    });
     hint(
         ui,
         t(
-            "Liegt normalerweise in .minecraft/versions/<Version>/<Version>.jar",
-            "Usually found at .minecraft/versions/<version>/<version>.jar",
+            "Geht: ein Vanilla-Template-Resourcepack (.zip, z. B. „26.3.x Template“) oder die Datei .minecraft/versions/<Version>/<Version>.jar. Eine .zip wird in den Einstellungsordner des Builders kopiert.",
+            "Works: a vanilla template resource pack (.zip, e.g. “26.3.x Template”) or the file .minecraft/versions/<version>/<version>.jar. A .zip is copied into the builder's settings folder.",
         ),
     );
 }
