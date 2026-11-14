@@ -372,6 +372,13 @@ fn menus(app: &mut App, ui: &mut Ui) {
         {
             app.onboarding = Some(0);
         }
+        if ui
+            .button(t("Nach Updates suchen…", "Check for updates…"))
+            .clicked()
+        {
+            app.check_updates(&ctx);
+            app.dialog = Dialog::Updates;
+        }
         if ui.button(t("Kurzanleitung", "Quick guide")).clicked() {
             app.dialog = Dialog::Message {
                 title: t("Kurzanleitung", "Quick guide").into(),
@@ -419,6 +426,65 @@ fn guide_text() -> String {
 
 // ------------------------------------------------------------- status bar
 
+/// Small "update ready" notice with a restart button.
+pub fn update_badge(app: &mut App, ui: &mut Ui) {
+    let ctx = ui.ctx().clone();
+    let Some(rel) = app.update.release.clone() else {
+        return;
+    };
+    if app.update.installer.is_some() {
+        icons::icon(ui, Icon::Refresh, 13.0, theme::GREEN);
+        ui.label(
+            RichText::new(format!(
+                "{} {} {}",
+                t("Update", "Update"),
+                rel.version,
+                t("bereit", "ready")
+            ))
+            .size(12.0)
+            .color(theme::GREEN),
+        );
+        if ui
+            .add(
+                egui::Button::new(RichText::new(t("Jetzt neu starten", "Restart now")).size(12.0))
+                    .small(),
+            )
+            .clicked()
+        {
+            app.install_update_now(&ctx);
+        }
+        ui.add_space(12.0);
+    } else if app.update.downloading {
+        ui.label(
+            RichText::new(format!(
+                "{} {} {:.0}%",
+                t("Lade Update", "Downloading update"),
+                rel.version,
+                app.update.progress * 100.0
+            ))
+            .size(12.0)
+            .color(theme::TEXT_WEAK),
+        );
+        ui.add_space(12.0);
+    } else if ui
+        .add(
+            egui::Label::new(
+                RichText::new(format!(
+                    "{} {}",
+                    t("Update verfügbar:", "Update available:"),
+                    rel.version
+                ))
+                .size(12.0)
+                .color(theme::GREEN),
+            )
+            .sense(Sense::click()),
+        )
+        .clicked()
+    {
+        app.dialog = Dialog::Updates;
+    }
+}
+
 pub fn status_bar(app: &mut App, ui: &mut Ui) {
     egui::Panel::bottom("status_bar")
         .exact_size(24.0)
@@ -430,6 +496,7 @@ pub fn status_bar(app: &mut App, ui: &mut Ui) {
         )
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
+                update_badge(app, ui);
                 let (dot, txt) = if app.job.is_some() {
                     (theme::YELLOW, t("Build läuft…", "Building…"))
                 } else {

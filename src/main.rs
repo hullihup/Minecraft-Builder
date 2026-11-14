@@ -12,6 +12,7 @@ mod resourcepack;
 mod theme;
 mod tools;
 mod ui;
+mod update;
 
 use std::path::PathBuf;
 

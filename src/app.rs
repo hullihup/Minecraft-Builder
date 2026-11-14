@@ -126,6 +126,20 @@ pub enum Dialog {
         title: String,
         text: String,
     },
+    Updates,
+}
+
+/// State of the updater.
+#[derive(Default)]
+pub struct UpdateState {
+    pub rx: Option<Receiver<crate::update::UpdateMsg>>,
+    pub checking: bool,
+    pub checked: bool,
+    pub release: Option<crate::update::Release>,
+    pub progress: f32,
+    pub downloading: bool,
+    pub installer: Option<PathBuf>,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -134,6 +148,7 @@ pub enum AfterSave {
     NewProject,
     Open,
     Home,
+    Update,
 }
 
 /// "Add block" popup.
@@ -194,6 +209,7 @@ pub struct App {
     pub setup: Option<SetupState>,
     pub pack: PackCache,
     pub show_commands: bool,
+    pub update: UpdateState,
     /// Collapsed categories in the block search.
     pub palette_collapsed: std::collections::HashSet<String>,
     pub palette_filter: u8,
@@ -257,6 +273,7 @@ impl App {
             setup: None,
             pack: PackCache::default(),
             show_commands: false,
+            update: UpdateState::default(),
             palette_collapsed: Default::default(),
             palette_filter: 0,
             cmd_draft: None,
@@ -277,6 +294,9 @@ impl App {
         app.canvas.fit_request = true;
         if !app.settings.onboarded {
             app.onboarding = Some(0);
+        }
+        if app.settings.auto_update && crate::update::is_installed() {
+            app.check_updates(&cc.egui_ctx);
         }
         if let Some(p) = open {
             app.open_path(p);
@@ -652,6 +672,109 @@ impl App {
             AfterSave::Home => {
                 self.saved = self.project.clone();
                 self.go_home();
+            }
+            AfterSave::Update => {
+                self.saved = self.project.clone();
+                self.install_update_now(ctx);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------ updates
+
+    pub fn check_updates(&mut self, ctx: &egui::Context) {
+        if self.update.checking || self.update.downloading {
+            return;
+        }
+        self.update.checking = true;
+        self.update.error = None;
+        self.update.rx = Some(crate::update::start_check(ctx.clone()));
+    }
+
+    pub fn download_update(&mut self, ctx: &egui::Context) {
+        let Some(rel) = self.update.release.clone() else {
+            return;
+        };
+        if self.update.downloading || self.update.installer.is_some() {
+            return;
+        }
+        self.update.downloading = true;
+        self.update.progress = 0.0;
+        self.update.rx = Some(crate::update::start_download(rel, ctx.clone()));
+    }
+
+    /// Installs the downloaded update now and restarts the app.
+    pub fn install_update_now(&mut self, ctx: &egui::Context) {
+        if self.dirty() && self.screen == Screen::Editor {
+            self.dialog = Dialog::UnsavedChanges {
+                then: AfterSave::Update,
+            };
+            return;
+        }
+        let Some(path) = self.update.installer.take() else {
+            return;
+        };
+        match crate::update::run_installer(&path, true) {
+            Ok(()) => {
+                self.allow_close = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Err(e) => {
+                self.update.error = Some(e);
+                self.update.installer = Some(path);
+            }
+        }
+    }
+
+    fn poll_update(&mut self, ctx: &egui::Context) {
+        let mut msgs = vec![];
+        if let Some(rx) = &self.update.rx {
+            while let Ok(m) = rx.try_recv() {
+                msgs.push(m);
+            }
+        }
+        for m in msgs {
+            match m {
+                crate::update::UpdateMsg::Checked(r) => {
+                    self.update.checking = false;
+                    self.update.checked = true;
+                    self.update.rx = None;
+                    match r {
+                        Ok(Some(rel)) => {
+                            self.log(
+                                Level::Info,
+                                format!("Update verfügbar: Version {}", rel.version),
+                            );
+                            self.update.release = Some(rel);
+                            if self.settings.auto_update && crate::update::is_installed() {
+                                self.download_update(ctx);
+                            }
+                        }
+                        Ok(None) => self.update.release = None,
+                        Err(e) => self.update.error = Some(e),
+                    }
+                }
+                crate::update::UpdateMsg::Progress(p) => self.update.progress = p,
+                crate::update::UpdateMsg::Downloaded(r) => {
+                    self.update.downloading = false;
+                    self.update.rx = None;
+                    match r {
+                        Ok(p) => {
+                            self.log(
+                                Level::Done,
+                                t(
+                                    "Update heruntergeladen – wird beim Beenden installiert.",
+                                    "Update downloaded – it is installed when you close the app.",
+                                ),
+                            );
+                            self.update.installer = Some(p);
+                        }
+                        Err(e) => {
+                            self.log(Level::Warn, format!("Update-Download fehlgeschlagen: {e}"));
+                            self.update.error = Some(e);
+                        }
+                    }
+                }
             }
         }
     }
@@ -1105,6 +1228,10 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         self.poll_jobs();
         self.poll_setup();
+        self.poll_update(&ctx);
+        if self.update.checking || self.update.downloading {
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
         self.handle_close(&ctx);
 
         if self.screen == Screen::Home {
@@ -1173,5 +1300,11 @@ impl Drop for App {
     fn drop(&mut self) {
         self.cancel_build();
         self.settings.save();
+        // A downloaded update is installed silently after closing.
+        if let Some(p) = self.update.installer.take() {
+            if self.settings.auto_update {
+                let _ = crate::update::run_installer(&p, false);
+            }
+        }
     }
 }

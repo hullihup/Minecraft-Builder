@@ -198,6 +198,10 @@ fn left_column(app: &mut App, ui: &mut Ui) {
     ui.add_space(6.0);
     tool_status(app, ui, &ctx);
 
+    if app.update.release.is_some() {
+        ui.add_space(14.0);
+        ui.horizontal_wrapped(|ui| crate::ui::panels::update_badge(app, ui));
+    }
     ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
         ui.label(
             RichText::new(t(

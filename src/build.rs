@@ -405,6 +405,13 @@ pub struct AppSettings {
     pub recent_blocks: Vec<String>,
     #[serde(default)]
     pub favorite_blocks: Vec<String>,
+    /// Download and install updates automatically.
+    #[serde(default = "default_true")]
+    pub auto_update: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AppSettings {
@@ -418,6 +425,7 @@ impl Default for AppSettings {
             left_drag_selects: false,
             recent_blocks: vec![],
             favorite_blocks: vec![],
+            auto_update: true,
         }
     }
 }

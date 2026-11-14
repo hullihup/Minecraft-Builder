@@ -258,6 +258,91 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 close = true;
             }
         }
+        Dialog::Updates => {
+            let r = egui::Modal::new(egui::Id::unique("dlg_updates")).frame(dialog_frame()).show(ctx, |ui| {
+                ui.set_width(520.0);
+                ui.label(RichText::new(t("Updates", "Updates")).size(20.0).strong());
+                ui.add_space(6.0);
+                ui.label(format!("{} {}", t("Deine Version:", "Your version:"), crate::update::current_version()));
+                ui.add_space(8.0);
+                let u = &app.update;
+                let mut action = 0;
+                if u.checking {
+                    ui.horizontal(|ui| {
+                        ui.add(egui::Spinner::new());
+                        ui.label(t("Suche nach Updates …", "Looking for updates …"));
+                    });
+                } else if let Some(rel) = &u.release {
+                    ui.label(RichText::new(format!("{} {}", t("Neue Version verfügbar:", "New version available:"), rel.version)).size(16.0).color(theme::GREEN));
+                    if !rel.notes.trim().is_empty() {
+                        ui.add_space(6.0);
+                        egui::Frame::new().fill(theme::INPUT_BG).corner_radius(6).inner_margin(10).show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                                ui.label(RichText::new(&rel.notes).size(12.5));
+                            });
+                        });
+                    }
+                    ui.add_space(8.0);
+                    if u.downloading {
+                        ui.label(t("Lade herunter …", "Downloading …"));
+                        ui.add(egui::ProgressBar::new(u.progress).show_percentage());
+                    } else if u.installer.is_some() {
+                        ui.label(RichText::new(t("Bereit zur Installation. Ohne Klick wird es beim Schließen der App automatisch installiert.", "Ready to install. Without a click it is installed automatically when you close the app.")).color(theme::TEXT_WEAK));
+                        ui.add_space(6.0);
+                        if ui.add(primary(t("Jetzt installieren & neu starten", "Install now & restart"))).clicked() {
+                            action = 2;
+                        }
+                    } else if crate::update::is_installed() && rel.installer.is_some() {
+                        if ui.add(primary(t("Herunterladen & installieren", "Download & install"))).clicked() {
+                            action = 1;
+                        }
+                    } else {
+                        ui.label(RichText::new(t(
+                            "Automatische Updates gehen nur mit der installierten Version. Lade den Installer von GitHub:",
+                            "Automatic updates only work with the installed version. Download the installer from GitHub:",
+                        )).color(theme::TEXT_WEAK));
+                        ui.hyperlink_to(t("Zur Download-Seite", "Open download page"), &rel.page);
+                    }
+                } else if u.checked && u.error.is_none() {
+                    ui.label(RichText::new(t("Du hast die neueste Version.", "You have the latest version.")).color(theme::GREEN));
+                }
+                if let Some(e) = &u.error {
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(e).size(12.0).color(theme::YELLOW));
+                }
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    if crate::ui::widgets::toggle(ui, &mut app.settings.auto_update).changed() {
+                        app.settings.save();
+                    }
+                    ui.label(t("Updates automatisch herunterladen und beim Beenden installieren", "Download updates automatically and install them on exit"));
+                });
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    if ui.button(t("Erneut suchen", "Check again")).clicked() {
+                        action = 3;
+                    }
+                    if ui.button(t("Schließen", "Close")).clicked() {
+                        close = true;
+                    }
+                });
+                action
+            });
+            if r.should_close() {
+                close = true;
+            }
+            match r.inner {
+                1 => app.download_update(ctx),
+                2 => {
+                    app.dialog = Dialog::None;
+                    app.install_update_now(ctx);
+                    return;
+                }
+                3 => app.check_updates(ctx),
+                _ => {}
+            }
+        }
         Dialog::About => {
             let r = egui::Modal::new(egui::Id::unique("dlg_about")).frame(dialog_frame()).show(ctx, |ui| {
                 ui.set_width(380.0);

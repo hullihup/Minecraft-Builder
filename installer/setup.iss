@@ -4,7 +4,7 @@
 
 #define AppName "Minecraft Builder"
 #ifndef AppVersion
-  #define AppVersion "0.2.0"
+  #define AppVersion "0.3.0"
 #endif
 #define AppExe "minecraft-builder.exe"
 
@@ -72,8 +72,16 @@ Root: HKA; Subkey: "Software\Classes\MinecraftBuilder.Project\DefaultIcon"; Valu
 Root: HKA; Subkey: "Software\Classes\MinecraftBuilder.Project\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc
 
 [Run]
-; Use the language picked in the installer inside the app too.
-Filename: "{app}\{#AppExe}"; Parameters: "--lang {language}"; Flags: runhidden waituntilterminated
+; Use the language picked in the installer inside the app too (not for silent updates).
+Filename: "{app}\{#AppExe}"; Parameters: "--lang {language}"; Flags: runhidden waituntilterminated; Check: not WizardSilent
 ; Download Java (if missing) and prepare Gradle, so the first build is fast.
-Filename: "{app}\{#AppExe}"; Parameters: "--setup-tools"; StatusMsg: "{cm:SettingUpTools}"; Flags: runhidden waituntilterminated; Tasks: setuptools
+Filename: "{app}\{#AppExe}"; Parameters: "--setup-tools"; StatusMsg: "{cm:SettingUpTools}"; Flags: runhidden waituntilterminated; Tasks: setuptools; Check: not WizardSilent
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+; Automatic update from inside the app: start it again afterwards.
+Filename: "{app}\{#AppExe}"; Flags: nowait; Check: ShouldRelaunch
+
+[Code]
+function ShouldRelaunch: Boolean;
+begin
+  Result := WizardSilent and (ExpandConstant('{param:RELAUNCH|0}') = '1');
+end;
