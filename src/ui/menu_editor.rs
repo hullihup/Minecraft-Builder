@@ -57,14 +57,14 @@ pub fn parse(text: &str) -> Vec<MenuItem> {
             };
             it.slot = slot;
             it.item = p.get(1).unwrap_or(&"").trim().to_string();
-            it.name = p.get(2).unwrap_or(&"").trim().to_string();
-            it.lore = p.get(3).unwrap_or(&"").trim().to_string();
+            it.name = p.get(2).unwrap_or(&"").to_string();
+            it.lore = p.get(3).unwrap_or(&"").to_string();
             it.amount = p.get(4).and_then(|s| s.trim().parse().ok()).unwrap_or(1);
             it.model = p.get(5).unwrap_or(&"").trim().to_string();
             it.take = p.get(6).map(|f| f.contains("take")).unwrap_or(false);
             it.id = p.get(7).map(|x| clean_id(x)).unwrap_or_default();
             it.action = p.get(8).map(|x| x.trim().to_string()).unwrap_or_default();
-            it.arg = p.get(9).map(|x| x.trim().to_string()).unwrap_or_default();
+            it.arg = p.get(9).map(|x| x.to_string()).unwrap_or_default();
         } else {
             let Some((slot, rest)) = line.split_once(':') else {
                 continue;
@@ -1699,6 +1699,21 @@ pub fn item_picker(app: &mut App, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spaces_in_names_survive_editing() {
+        let items = vec![MenuItem {
+            slot: 3,
+            item: "minecraft:diamond".into(),
+            name: "&bMein ".into(),
+            lore: "Zeile eins |zwei ".into(),
+            amount: 1,
+            ..Default::default()
+        }];
+        let back = parse(&serialize(&items));
+        assert_eq!(back[0].name, "&bMein ");
+        assert_eq!(back[0].lore, "Zeile eins |zwei ");
+    }
 
     #[test]
     fn menu_items_round_trip_and_read_the_old_format() {

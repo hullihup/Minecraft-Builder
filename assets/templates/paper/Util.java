@@ -361,6 +361,22 @@ __COMMON__
         return v == null ? "" : v;
     }
 
+    /** "left", "right", "shift_left", "shift_right" or "other". */
+    public static String clickName(org.bukkit.event.inventory.ClickType c) {
+        return switch (c) {
+            case LEFT -> "left";
+            case RIGHT -> "right";
+            case SHIFT_LEFT -> "shift_left";
+            case SHIFT_RIGHT -> "shift_right";
+            default -> "other";
+        };
+    }
+
+    /** Does the click match the "Button" setting of "Menu click"? */
+    public static boolean clickMatches(org.bukkit.event.inventory.ClickType c, String want) {
+        return want.isEmpty() || want.equals("any") || clickName(c).equals(want);
+    }
+
     // ----- recipes ----------------------------------------------------------------
 
     static Material recipeMat(String id) {
