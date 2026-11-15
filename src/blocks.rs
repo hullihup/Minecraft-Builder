@@ -304,6 +304,8 @@ pub enum FieldKind {
     Recipe,
     /// ID of a slot of a menu (picked from the menu editor's IDs, empty = any).
     MenuItemId,
+    /// Name of a menu, picked from the "Open menu" blocks of the project.
+    MenuName,
 }
 
 #[derive(Clone, Debug)]
@@ -2118,7 +2120,7 @@ fn build_all() -> Vec<BlockDef> {
             ("Klick im Menü", "Menu click"),
             ("Wird ausgelöst, wenn ein Spieler in einem Menü von „Menü öffnen“ klickt. Mit „Item-ID“ reagiert der Block nur auf das Item, dem du im Menü-Editor diese ID gegeben hast. Items bleiben im Menü, außer du erlaubst das Herausnehmen. Nur Paper.",
              "Fires when a player clicks in a menu from “Open menu”. With “Item ID” the block only reacts to the item you gave this ID in the menu editor. Items stay in the menu unless you allow taking them. Paper only."))
-            .f("menu", ("Menü-Name", "Menu name"), F::Text, "shop")
+            .f("menu", ("Menü-Name", "Menu name"), F::MenuName, "shop")
             .f("click_id", ("Item-ID", "Item ID"), F::MenuItemId, "")
             .o("player", p_player, T::Player)
             .o("slot", ("Platz", "Slot"), T::Number)
@@ -2144,7 +2146,7 @@ fn build_all() -> Vec<BlockDef> {
              "Swaps a menu – for one player or for everyone. “Whole menu” replaces everything, “Only these slots” only the slots you fill in the editor (the rest stays as in the original). Whoever opens the menu afterwards sees the new version (survives restarts); if it is open right now, it is swapped at once. “Reset menu” brings the original back. Paper only."))
             .f("scope", ("Für", "For"), F::Choice(MENU_SCOPES), "player")
             .f("mode", ("Ersetzen", "Replace"), F::Choice(MENU_MODES), "all")
-            .f("menu", ("Menü-Name", "Menu name"), F::Text, "shop")
+            .f("menu", ("Menü-Name", "Menu name"), F::MenuName, "shop")
             .f("items", ("Items", "Items"), F::Menu, "13\tminecraft:emerald\t&aNeues Menü\t&7Nur für dich\t1\t\t\t")
             .i("player", p_player, T::Player, "")
             .h(("Für wen das Menü ausgetauscht wird. Nicht verbunden = der Spieler aus dem Event. Bei „Alle Spieler“ wird er nicht gebraucht.", "Whose menu is swapped. Not connected = the player from the event. Not needed with “All players”."))
@@ -2160,7 +2162,7 @@ fn build_all() -> Vec<BlockDef> {
             ("Macht „Menü ersetzen“ rückgängig: Der Spieler (oder alle) sieht wieder das ursprüngliche Menü aus „Menü öffnen“. Nur Paper.",
              "Undoes “Replace menu”: the player (or everyone) sees the original menu from “Open menu” again. Paper only."))
             .f("scope", ("Für", "For"), F::Choice(MENU_SCOPES), "player")
-            .f("menu", ("Menü-Name", "Menu name"), F::Text, "shop")
+            .f("menu", ("Menü-Name", "Menu name"), F::MenuName, "shop")
             .i("player", p_player, T::Player, "")
             .paper("Util.resetMenu(${in:player}, \"${f:scope}\".equals(\"global\"), ${s:menu});"),
     );

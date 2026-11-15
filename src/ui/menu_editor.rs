@@ -24,7 +24,23 @@ pub struct MenuItem {
     pub take: bool,
     /// Own name of the slot, e.g. `buy_diamond`; "Menu click" can react to it.
     pub id: String,
+    /// What a click does without any blocks (see `ACTIONS`), and its value.
+    pub action: String,
+    pub arg: String,
 }
+
+/// Click actions of a slot: (id, label, label of the value or "" if none).
+pub const ACTIONS: &[(&str, (&str, &str), (&str, &str))] = &[
+    ("", ("Nichts (nur „Klick im Menü“)", "Nothing (only “Menu click”)"), ("", "")),
+    ("close", ("Menü schließen", "Close menu"), ("", "")),
+    ("open", ("Anderes Menü öffnen", "Open another menu"), ("Menü-Name", "Menu name")),
+    ("command", ("Befehl als Spieler", "Command as player"), ("Befehl", "Command")),
+    ("console", ("Befehl als Konsole", "Command as console"), ("Befehl ({player} = Spielername)", "Command ({player} = player name)")),
+    ("message", ("Nachricht senden", "Send message"), ("Nachricht", "Message")),
+    ("save_loc", ("Position speichern", "Save location"), ("Name (z. B. home1)", "Name (e.g. home1)")),
+    ("tp_loc", ("Zu gespeicherter Position", "To saved location"), ("Name (z. B. home1)", "Name (e.g. home1)")),
+    ("tp_warp", ("Zu Warp (für alle)", "To warp (for everyone)"), ("Warp-Name", "Warp name")),
+];
 
 /// Reads the block's "items" value (new tab format and the old "slot: item | name | lore").
 pub fn parse(text: &str) -> Vec<MenuItem> {
@@ -47,6 +63,8 @@ pub fn parse(text: &str) -> Vec<MenuItem> {
             it.model = p.get(5).unwrap_or(&"").trim().to_string();
             it.take = p.get(6).map(|f| f.contains("take")).unwrap_or(false);
             it.id = p.get(7).map(|x| clean_id(x)).unwrap_or_default();
+            it.action = p.get(8).map(|x| x.trim().to_string()).unwrap_or_default();
+            it.arg = p.get(9).map(|x| x.trim().to_string()).unwrap_or_default();
         } else {
             let Some((slot, rest)) = line.split_once(':') else {
                 continue;
@@ -78,7 +96,7 @@ pub fn serialize(items: &[MenuItem]) -> String {
     v.iter()
         .map(|i| {
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 i.slot,
                 clean(&i.item),
                 clean(&i.name),
@@ -86,7 +104,9 @@ pub fn serialize(items: &[MenuItem]) -> String {
                 i.amount.clamp(1, 99),
                 clean(&i.model),
                 if i.take { "take" } else { "" },
-                clean_id(&i.id)
+                clean_id(&i.id),
+                clean(&i.action),
+                clean(&i.arg)
             )
         })
         .collect::<Vec<_>>()
@@ -144,6 +164,120 @@ pub fn publish_ids(project: &crate::model::Project) {
     if let Ok(mut w) = MENU_IDS.write() {
         *w = out;
     }
+    let mut names: Vec<String> = project
+        .workspaces
+        .iter()
+        .flat_map(|w| w.nodes.iter())
+        .filter(|n| n.kind == "open_menu")
+        .map(|n| n.values.get("menu").cloned().unwrap_or_else(|| "shop".into()))
+        .collect();
+    names.sort();
+    names.dedup();
+    if let Ok(mut w) = MENU_NAMES.write() {
+        *w = names;
+    }
+}
+
+/// "Add another page": a new "Open menu" block below, linked with arrows in both menus.
+fn add_page(app: &mut App, ws: usize, nid: NodeId) {
+    let Some(node) = app.project.workspaces.get(ws).and_then(|w| w.node(nid)).cloned() else {
+        return;
+    };
+    let def = crate::blocks::get(&node.kind);
+    let default_items = def.and_then(|d| d.field("items")).map(|f| f.default).unwrap_or("");
+    let menu = node.values.get("menu").cloned().unwrap_or_else(|| "shop".into());
+    let rows = rows_of(&node.values);
+    let title = node.values.get("title").cloned().unwrap_or_else(|| "&8Shop".into());
+    // Free name: shop_2, shop_3 …
+    let base = match menu.rsplit_once('_') {
+        Some((b, n)) if n.parse::<u32>().is_ok() => b.to_string(),
+        _ => menu.clone(),
+    };
+    let taken: Vec<String> = app
+        .project
+        .workspaces
+        .iter()
+        .flat_map(|w| w.nodes.iter())
+        .filter(|n| n.kind == "open_menu")
+        .map(|n| n.values.get("menu").cloned().unwrap_or_default())
+        .collect();
+    let mut k = 2;
+    let new_name = loop {
+        let c = format!("{base}_{k}");
+        if !taken.contains(&c) {
+            break c;
+        }
+        k += 1;
+    };
+    let last = rows * 9 - 1;
+    let first_of_last_row = (rows - 1) * 9;
+    // Arrow "next page" in the bottom right of the current menu.
+    let mut list = parse(node.values.get("items").map(|s| s.as_str()).unwrap_or(default_items));
+    list.retain(|i| i.slot != last);
+    list.push(MenuItem {
+        slot: last,
+        item: "minecraft:arrow".into(),
+        name: "&eNächste Seite".into(),
+        amount: 1,
+        action: "open".into(),
+        arg: new_name.clone(),
+        ..Default::default()
+    });
+    // The new page with an arrow back in the bottom left.
+    let back = vec![MenuItem {
+        slot: first_of_last_row,
+        item: "minecraft:arrow".into(),
+        name: "&eZurück".into(),
+        amount: 1,
+        action: "open".into(),
+        arg: menu.clone(),
+        ..Default::default()
+    }];
+    let id = app.project.alloc_id();
+    let w = &mut app.project.workspaces[ws];
+    if let Some(n) = w.node_mut(nid) {
+        n.values.insert("items".into(), serialize(&list));
+    }
+    let mut values = std::collections::BTreeMap::new();
+    values.insert("menu".to_string(), new_name.clone());
+    values.insert("title".to_string(), format!("{title} &7(Seite {k})"));
+    values.insert("rows".to_string(), rows.to_string());
+    values.insert("items".to_string(), serialize(&back));
+    w.nodes.push(crate::model::Node {
+        id,
+        kind: "open_menu".into(),
+        pos: [node.pos[0], node.pos[1] + 420.0],
+        values,
+    });
+    app.menu_edit = Some(MenuEdit::new(ws, id));
+    app.log(
+        crate::build::Level::Done,
+        format!("Neue Seite „{new_name}“ angelegt – Pfeile in beiden Menüs gesetzt"),
+    );
+}
+
+/// Menu names that a click action opens (those menus do not need a flow).
+pub fn opened_by_actions(project: &crate::model::Project) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    for n in project.workspaces.iter().flat_map(|w| w.nodes.iter()) {
+        let Some(def) = crate::blocks::get(&n.kind) else { continue };
+        let Some(f) = def.fields.iter().find(|f| matches!(f.kind, crate::blocks::FieldKind::Menu)) else {
+            continue;
+        };
+        for it in parse(n.values.get(f.id).map(|s| s.as_str()).unwrap_or(f.default)) {
+            if it.action == "open" && !it.arg.trim().is_empty() {
+                out.insert(it.arg.trim().to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Names of the menus of "Open menu" blocks (for pickers).
+static MENU_NAMES: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
+
+pub fn menu_names() -> Vec<String> {
+    MENU_NAMES.read().map(|v| v.clone()).unwrap_or_default()
 }
 
 /// Slot IDs of one menu: (id, item).
@@ -455,6 +589,13 @@ fn mc_tooltip(ui: &mut Ui, it: &MenuItem) {
                 .size(11.0)
                 .color(Color32::from_rgb(0x55, 0x55, 0x55)),
             );
+            if let Some(a) = ACTIONS.iter().find(|a| !a.0.is_empty() && a.0 == it.action) {
+                ui.label(
+                    RichText::new(format!("{}: {} {}", t("Klick", "Click"), crate::i18n::tl(a.1), it.arg))
+                        .size(11.0)
+                        .color(Color32::from_rgb(0xFF, 0xFF, 0x55)),
+                );
+            }
             if !it.id.is_empty() {
                 ui.label(
                     RichText::new(format!("ID: {}", it.id))
@@ -539,6 +680,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     let mut drag = app.menu_edit.as_ref().and_then(|e| e.drag);
     let mut close = false;
     let mut open_picker: Option<usize> = None;
+    let mut new_page = false;
     let picker_open = app.item_picker.is_some();
 
     let modal = egui::Modal::new(Id::unique("menu_editor"))
@@ -884,6 +1026,19 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                             selected = None;
                         }
                     });
+                    if node.kind == "open_menu" {
+                        ui.add_space(4.0);
+                        if ui
+                            .button(t("➕ Weitere Seite anlegen", "➕ Add another page"))
+                            .on_hover_text(t(
+                                "Legt ein zweites Menü an und setzt Pfeile zum Vor- und Zurückblättern – ganz ohne Kabel.",
+                                "Creates a second menu and adds arrows to page forward and back – no wires needed.",
+                            ))
+                            .clicked()
+                        {
+                            new_page = true;
+                        }
+                    }
 
                     ui.add_space(14.0);
                     ui.separator();
@@ -946,6 +1101,58 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                                 .size(11.0)
                                 .color(theme::TEXT_WEAK),
                             );
+                            field_label(ui, t("Beim Klick", "On click"));
+                            let cur = ACTIONS
+                                .iter()
+                                .find(|a| a.0 == it.action)
+                                .copied()
+                                .unwrap_or(ACTIONS[0]);
+                            egui::ComboBox::from_id_salt(("menu_action", nid, slot))
+                                .width(ui.available_width())
+                                .selected_text(crate::i18n::tl(cur.1))
+                                .show_ui(ui, |ui| {
+                                    for a in ACTIONS {
+                                        if ui
+                                            .selectable_label(it.action == a.0, crate::i18n::tl(a.1))
+                                            .clicked()
+                                        {
+                                            it.action = a.0.to_string();
+                                        }
+                                    }
+                                });
+                            if !cur.2 .0.is_empty() {
+                                ui.horizontal(|ui| {
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut it.arg)
+                                            .hint_text(crate::i18n::tl(cur.2))
+                                            .desired_width(ui.available_width() - if it.action == "open" { 30.0 } else { 0.0 }),
+                                    );
+                                    if it.action == "open" {
+                                        let names = menu_names();
+                                        ui.menu_button("▾", |ui| {
+                                            for n in &names {
+                                                if ui.button(n).clicked() {
+                                                    it.arg = n.clone();
+                                                    ui.close();
+                                                }
+                                            }
+                                            if names.is_empty() {
+                                                ui.label(t("Keine weiteren Menüs im Projekt", "No other menus in the project"));
+                                            }
+                                        });
+                                    }
+                                });
+                            }
+                            if !it.action.is_empty() {
+                                ui.label(
+                                    RichText::new(t(
+                                        "Passiert ganz ohne Blöcke. „Klick im Menü“ läuft zusätzlich trotzdem.",
+                                        "Happens without any blocks. “Menu click” still runs as well.",
+                                    ))
+                                    .size(11.0)
+                                    .color(theme::TEXT_WEAK),
+                                );
+                            }
                             field_label(ui, t("Name (leer = normaler Item-Name)", "Name (empty = normal item name)"));
                             ui.add(
                                 egui::TextEdit::singleline(&mut it.name)
@@ -1097,6 +1304,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     if let Some(e) = app.menu_edit.as_mut() {
         e.slot = selected;
         e.drag = drag;
+    }
+    if new_page {
+        add_page(app, ws, nid);
     }
     if let Some(slot) = open_picker {
         app.item_picker = Some(ItemPicker::new(PickTarget::MenuSlot(slot), PickTab::All));

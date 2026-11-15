@@ -297,6 +297,8 @@ __COMMON__
         String baseItems = "";
         /** Slots whose item may be taken out by the player. */
         public final java.util.Set<Integer> takeable = new java.util.HashSet<>();
+        /** Click action per slot from the menu editor: {action, value}. */
+        public final java.util.Map<Integer, String[]> actions = new java.util.HashMap<>();
         private Inventory inventory;
 
         MenuHolder(String id) {
@@ -343,6 +345,7 @@ __COMMON__
             }
             inv.setItem(slot, is);
             if (e[6].contains("take")) holder.takeable.add(slot);
+            if (!e[8].isEmpty()) holder.actions.put(slot, new String[] { e[8], e[9] });
         }
         p.openInventory(inv);
     }
@@ -521,6 +524,54 @@ __COMMON__
             default -> false;
         };
         if (!(taking && holder.takeable.contains(event.getSlot()))) event.setCancelled(true);
+        String[] action = holder.actions.get(event.getSlot());
+        if (action != null && event.getWhoClicked() instanceof Player p) {
+            // Next tick: opening or closing inventories inside a click event is not allowed.
+            Bukkit.getScheduler().runTask(__MAIN__.INSTANCE, () -> runMenuAction(p, action[0], action[1]));
+        }
+    }
+
+    // ----- click actions of the menu editor ---------------------------------------
+
+    /** Menus of "Open menu" blocks, so a click can open another menu (pages): id -> {title, rows, items}. */
+    static final java.util.Map<String, String[]> MENUS = new java.util.HashMap<>();
+
+    public static void registerMenu(String id, String title, double rows, String items) {
+        MENUS.putIfAbsent(id, new String[] { title, String.valueOf((int) rows), items });
+    }
+
+    public static void openRegistered(Player p, String id) {
+        String[] m = MENUS.get(id);
+        if (m == null) {
+            p.sendMessage(color("&cMenu not found: " + id));
+            return;
+        }
+        openMenu(p, id, m[0], num(m[1]), m[2]);
+    }
+
+    static void runMenuAction(Player p, String action, String value) {
+        String v = value == null ? "" : value.replace("{player}", p.getName());
+        switch (action) {
+            case "close" -> p.closeInventory();
+            case "command" -> p.performCommand(v.startsWith("/") ? v.substring(1) : v);
+            case "console" -> Bukkit.dispatchCommand(Bukkit.getConsoleSender(), v.startsWith("/") ? v.substring(1) : v);
+            case "message" -> p.sendMessage(color(v));
+            case "open" -> openRegistered(p, v.trim());
+            case "save_loc" -> {
+                saveLoc(uuid(p) + "." + v.trim(), p.getLocation());
+                p.sendMessage(color("&a\u2714 " + v.trim()));
+            }
+            case "tp_loc", "tp_warp" -> {
+                Location l = loadLoc((action.equals("tp_warp") ? "global" : uuid(p)) + "." + v.trim());
+                if (l == null) {
+                    p.sendMessage(color("&c" + v.trim() + " \u2716"));
+                } else {
+                    p.closeInventory();
+                    p.teleport(l);
+                }
+            }
+            default -> { }
+        }
     }
 
     public static void menuGuard(org.bukkit.event.inventory.InventoryDragEvent event) {

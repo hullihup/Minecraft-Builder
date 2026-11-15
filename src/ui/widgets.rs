@@ -103,6 +103,37 @@ pub fn field_editor(
                 .color(theme::TEXT_WEAK),
             );
         }
+        FieldKind::MenuName => {
+            let names = crate::ui::menu_editor::menu_names();
+            let known = names.contains(&v);
+            egui::ComboBox::from_id_salt(id_salt)
+                .width(width)
+                .selected_text(if known || v.is_empty() {
+                    egui::RichText::new(v.clone())
+                } else {
+                    egui::RichText::new(format!("{v} ⚠")).color(theme::YELLOW)
+                })
+                .height(300.0)
+                .show_ui(ui, |ui| {
+                    ui.set_min_width(200.0);
+                    for n in &names {
+                        ui.selectable_value(&mut v, n.clone(), n);
+                    }
+                    if names.is_empty() {
+                        ui.label(
+                            egui::RichText::new(t(
+                                "Noch kein Block „Menü öffnen“ im Projekt.",
+                                "No “Open menu” block in the project yet.",
+                            ))
+                            .size(11.0)
+                            .color(theme::TEXT_WEAK),
+                        );
+                    }
+                    ui.separator();
+                    ui.label(egui::RichText::new(t("Eigenen Namen eingeben:", "Type a name:")).size(11.0).color(theme::TEXT_WEAK));
+                    ui.add(egui::TextEdit::singleline(&mut v).desired_width(f32::INFINITY));
+                });
+        }
         FieldKind::MenuItemId => {
             let menu = get_val(values, "menu", "shop");
             let ids = crate::ui::menu_editor::ids_of(&menu);

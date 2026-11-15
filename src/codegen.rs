@@ -384,7 +384,8 @@ impl<'a> Gen<'a> {
             | FieldKind::ItemModel
             | FieldKind::Menu
             | FieldKind::Recipe
-            | FieldKind::MenuItemId => {
+            | FieldKind::MenuItemId
+            | FieldKind::MenuName => {
                 v.to_string()
             }
         }
@@ -1034,6 +1035,28 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
         }
     }
 
+    // Menus are known by name, so a click in the menu editor can open another one (pages).
+    if g.p == Platform::Paper {
+        for n in ws.nodes.iter().filter(|n| n.kind == "open_menu") {
+            let Some(def) = blocks::get(&n.kind) else { continue };
+            let field = |id: &str| {
+                let d = def.field(id).map(|f| f.default).unwrap_or("");
+                value_of(n, id, d).to_string()
+            };
+            let pin = |id: &str| {
+                let d = def.input(id).map(|p| p.default).unwrap_or("");
+                value_of(n, id, d).to_string()
+            };
+            parts.init.push(format!(
+                "Util.registerMenu({}, {}, {}, {});",
+                java_str(&field("menu")),
+                java_str(&pin("title")),
+                java_num(&pin("rows")),
+                java_str(&field("items"))
+            ));
+        }
+    }
+
     // Recipes: registered at start, no flow needed.
     for n in ws.nodes.iter().filter(|n| n.kind == "recipe") {
         let Some(def) = blocks::get(&n.kind) else { continue };
@@ -1070,8 +1093,16 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
     }
 
     // Blocks that never run.
+    let opened = crate::ui::menu_editor::opened_by_actions(g.proj);
     for n in &ws.nodes {
         if g.reached.contains(&n.id) {
+            continue;
+        }
+        // Menu pages opened by a click action need no flow.
+        if n.kind == "open_menu"
+            && opened.contains(value_of(n, "menu", "shop"))
+            && g.p == Platform::Paper
+        {
             continue;
         }
         if let Some(d) = blocks::get(&n.kind) {
@@ -1102,8 +1133,31 @@ pub fn generate(proj: &Project) -> Output {
     let p = s.platform;
     let main = s.main_class();
     let mut problems = vec![];
+    let menu_names: HashSet<String> = proj
+        .workspaces
+        .iter()
+        .flat_map(|w| w.nodes.iter())
+        .filter(|n| n.kind == "open_menu")
+        .map(|n| value_of(n, "menu", "shop").to_string())
+        .collect();
     for (wi, ws) in proj.workspaces.iter().enumerate() {
         for n in &ws.nodes {
+            // A menu name that no "Open menu" block uses: the block would never react.
+            if let Some(def) = blocks::get(&n.kind) {
+                if let Some(f) = def.fields.iter().find(|f| matches!(f.kind, FieldKind::MenuName)) {
+                    let name = value_of(n, f.id, f.default);
+                    if !menu_names.contains(name) {
+                        problems.push(Problem {
+                            ws: wi,
+                            node: Some(n.id),
+                            msg: format!(
+                                "Es gibt kein Menü „{name}“ – kein Block „Menü öffnen“ hat diesen Menü-Namen"
+                            ),
+                            error: false,
+                        });
+                    }
+                }
+            }
             if n.kind == "send_pack" && !s.pack.enabled() {
                 problems.push(Problem {
                     ws: wi,
