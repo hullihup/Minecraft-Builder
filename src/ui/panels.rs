@@ -594,6 +594,11 @@ pub fn activity_bar(app: &mut App, ui: &mut Ui) {
                     t("Texturen & Modelle", "Textures & models"),
                 ),
                 (
+                    Activity::Config,
+                    Icon::Sliders,
+                    t("Einstellungen (config.yml)", "Settings (config.yml)"),
+                ),
+                (
                     Activity::Project,
                     Icon::Gear,
                     t("Projekt & Versionen", "Project & versions"),
@@ -654,6 +659,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                     Activity::Project => sidebar_project(app, ui),
                     Activity::Build => sidebar_build(app, ui),
                     Activity::Resources => crate::ui::resources::sidebar(app, ui),
+                    Activity::Config => crate::ui::config::sidebar(app, ui),
                 });
         });
 }
@@ -1165,6 +1171,36 @@ fn sidebar_build(app: &mut App, ui: &mut Ui) {
             }
         }
     });
+    if !app.project.settings.deploy_dir.trim().is_empty() {
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(t(
+                "Ältere Versionen deiner .jar in diesem Ordner werden automatisch ersetzt.",
+                "Older versions of your jar in this folder are replaced automatically.",
+            ))
+            .size(11.0)
+            .color(theme::GREEN),
+        );
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            widgets::toggle(ui, &mut app.project.settings.deploy_clean);
+            ui.label(
+                RichText::new(t(
+                    "Plugin-Ordner dabei löschen",
+                    "Also delete the plugin folder",
+                ))
+                .size(12.0),
+            );
+        });
+        ui.label(
+            RichText::new(t(
+                "Löscht nach jedem Build den Daten-Ordner des Plugins auf dem Server (config.yml und gespeicherte Daten), damit alles frisch angelegt wird.",
+                "Deletes the plugin's data folder on the server after each build (config.yml and stored data), so everything is created fresh.",
+            ))
+            .size(11.0)
+            .color(theme::TEXT_WEAK),
+        );
+    }
     if let Some(path) = &app.path {
         ui.add_space(10.0);
         let dir = crate::build::export_dir(path, &app.project);

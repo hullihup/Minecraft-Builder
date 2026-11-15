@@ -56,6 +56,7 @@ pub enum Icon {
     Refresh,
     Edit,
     Keyboard,
+    Sliders,
 }
 
 struct Pen<'a> {
@@ -455,6 +456,15 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
                 (4.5, 15.0),
             ]);
             p.line(&[(13.0, 6.5), (17.5, 11.0)]);
+        }
+        Sliders => {
+            p.line(&[(3.0, 6.0), (21.0, 6.0)]);
+            p.line(&[(3.0, 12.0), (21.0, 12.0)]);
+            p.line(&[(3.0, 18.0), (21.0, 18.0)]);
+            for (x, y) in [(8.0, 6.0), (15.0, 12.0), (10.0, 18.0)] {
+                p.p.circle_filled(p.pt(x, y), 2.6 * p.k(), crate::theme::BG_PANEL);
+                p.circle(x, y, 2.6);
+            }
         }
         Keyboard => {
             p.rect(2.5, 6.0, 21.5, 18.0, 2.0);

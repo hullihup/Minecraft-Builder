@@ -1,5 +1,6 @@
 pub mod canvas;
 pub mod commands;
+pub mod config;
 pub mod dialogs;
 pub mod home;
 pub mod icons;

@@ -49,7 +49,7 @@ jobs:
           name: Minecraft Builder ${{ steps.installer.outputs.version }}
           target_commitish: ${{ github.sha }}
           make_latest: true
-          generate_release_notes: true
+          body_path: RELEASE_NOTES.md
           files: |
             target/release/minecraft-builder.exe
             target/installer/*.exe

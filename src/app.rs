@@ -16,6 +16,7 @@ pub enum Activity {
     Workspaces,
     Blocks,
     Resources,
+    Config,
     Project,
     Build,
 }
@@ -1254,6 +1255,9 @@ impl eframe::App for App {
         self.shortcuts(&ctx);
         self.refresh_generated();
         self.refresh_pack(false);
+        crate::ui::widgets::set_config_keys(
+            self.project.config.iter().map(|c| c.key.clone()).collect(),
+        );
 
         ui::panels::top_bar(self, ui);
         ui::panels::status_bar(self, ui);

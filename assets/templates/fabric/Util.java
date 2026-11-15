@@ -314,4 +314,79 @@ __COMMON__
         double dx = a.x() - b.x(), dy = a.y() - b.y(), dz = a.z() - b.z();
         return Math.sqrt(dx * dx + dy * dy + dz * dz);
     }
+
+    // ----- settings (config/<mod>.properties) ----------------------------------------
+
+    private static final java.util.Properties CFG = new java.util.Properties();
+    private static java.nio.file.Path cfgFile;
+    private static String cfgDefaults = "";
+
+    public static void loadConfig(java.nio.file.Path file, String defaults) {
+        cfgFile = file;
+        cfgDefaults = defaults;
+        reloadConfig();
+    }
+
+    public static void reloadConfig() {
+        try {
+            CFG.clear();
+            CFG.load(new java.io.StringReader(cfgDefaults));
+            if (cfgFile == null) return;
+            if (!java.nio.file.Files.exists(cfgFile)) {
+                java.nio.file.Files.createDirectories(cfgFile.getParent());
+                java.nio.file.Files.writeString(cfgFile, cfgDefaults);
+            }
+            try (java.io.Reader r = java.nio.file.Files.newBufferedReader(cfgFile)) {
+                CFG.load(r);
+            }
+        } catch (java.io.IOException e) {
+            __MAIN__.LOGGER.warn("Could not read the settings file", e);
+        }
+    }
+
+    public static String cfgText(String key, String def) {
+        return CFG.getProperty(key, def);
+    }
+
+    public static double cfgNum(String key, double def) {
+        String v = CFG.getProperty(key);
+        return isNum(v) ? num(v) : def;
+    }
+
+    public static boolean cfgBool(String key, boolean def) {
+        String v = CFG.getProperty(key);
+        return isBool(v) ? bool(v) : def;
+    }
+
+    // ----- even more blocks ---------------------------------------------------------
+
+    public static void repeat(double times, double seconds, java.util.function.IntConsumer body) {
+        repeatStep(1, (int) times, Math.max(1, (int) (seconds * 20)), body);
+    }
+
+    private static void repeatStep(int i, int n, int ticks, java.util.function.IntConsumer body) {
+        if (i > n) return;
+        body.accept(i);
+        if (i < n) Scheduler.later(ticks, () -> repeatStep(i + 1, n, ticks, body));
+    }
+
+    public static void damage(ServerPlayer p, double amount) {
+        p.hurtServer(p.level(), p.damageSources().generic(), (float) amount);
+    }
+
+    public static void launch(ServerPlayer p, double power) {
+        p.setDeltaMovement(p.getDeltaMovement().x, power, p.getDeltaMovement().z);
+        p.connection.send(new net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket(p));
+    }
+
+    public static void clearChat(ServerPlayer p) {
+        for (int i = 0; i < 100; i++) p.sendSystemMessage(Component.empty());
+    }
+
+    public static void dropItem(Loc l, String id, double amount) {
+        Item item = BuiltInRegistries.ITEM.getValue(id(id));
+        if (item == Items.AIR) return;
+        ItemStack st = new ItemStack(item, Math.max(1, Math.min(item.getDefaultMaxStackSize(), (int) amount)));
+        l.level().addFreshEntity(new net.minecraft.world.entity.item.ItemEntity(l.level(), l.x(), l.y(), l.z(), st));
+    }
 }

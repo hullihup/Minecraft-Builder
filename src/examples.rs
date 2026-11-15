@@ -261,6 +261,26 @@ pub fn all_blocks_project(platform: Platform) -> Project {
     let mut p = new_project("Alle Bloecke", platform, Starter::Empty);
     p.settings.pack.path = "testpack.zip".into();
     p.workspaces = vec![Workspace::new("Test")];
+    p.config = vec![
+        crate::model::ConfigEntry {
+            key: "preis".into(),
+            ty: crate::model::ConfigType::Number,
+            value: "5".into(),
+            description: "Preis im Shop".into(),
+        },
+        crate::model::ConfigEntry {
+            key: "gruss".into(),
+            ty: crate::model::ConfigType::Text,
+            value: "&aHallo: \"du\"".into(),
+            description: String::new(),
+        },
+        crate::model::ConfigEntry {
+            key: "aktiv".into(),
+            ty: crate::model::ConfigType::Bool,
+            value: "true".into(),
+            description: String::new(),
+        },
+    ];
     let mut b = Builder { p: &mut p, ws: 0 };
     let defs: Vec<_> = blocks::all()
         .iter()
@@ -309,13 +329,24 @@ pub fn all_blocks_project(platform: Platform) -> Project {
         } else {
             // "if"/"chance" end the chain; continue from the log in the first branch.
             let l = b.node("log", x, 700.0, &[]);
-            b.link(n, "then", l, "in");
+            let first = d
+                .outputs
+                .iter()
+                .find(|o| o.ty == PinType::Exec)
+                .map(|o| o.id.to_string())
+                .unwrap_or_else(|| "then".into());
+            b.link(n, &first, l, "in");
             last = (l, "next");
         }
     }
     // Every value output goes into a log.
     for d in defs.iter().filter(|d| d.kind == Kind::Value) {
-        let n = b.node(d.id, x, 400.0, &[]);
+        let vals: &[(&str, &str)] = if d.id == "config_get" {
+            &[("key", "preis")]
+        } else {
+            &[]
+        };
+        let n = b.node(d.id, x, 400.0, vals);
         for o in d.outputs.iter() {
             let l = b.node("log", x, 0.0, &[]);
             x += 300.0;

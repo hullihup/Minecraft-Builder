@@ -121,3 +121,22 @@
             parts.length > 2 ? parts[2].trim() : ""
         };
     }
+
+    public static String now(String format) {
+        try {
+            return java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern(format));
+        } catch (Exception e) {
+            return java.time.LocalDateTime.now().toString();
+        }
+    }
+
+    public static String cut(String text, double max) {
+        int n = Math.max(0, (int) max);
+        return text == null ? "" : text.length() <= n ? text : text.substring(0, n);
+    }
+
+    public static String pick(String list) {
+        if (list == null || list.isBlank()) return "";
+        String[] parts = list.split(",");
+        return parts[java.util.concurrent.ThreadLocalRandom.current().nextInt(parts.length)].trim();
+    }

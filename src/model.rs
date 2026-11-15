@@ -78,6 +78,9 @@ pub struct ProjectSettings {
     /// Optional folder of a test server (plugins/ or mods/) the jar gets copied into.
     #[serde(default)]
     pub deploy_dir: String,
+    /// Also delete the plugin's data folder on the server after each build.
+    #[serde(default)]
+    pub deploy_clean: bool,
     /// Optional resource pack (textures/models) bundled into the plugin/mod.
     #[serde(default)]
     pub pack: PackSettings,
@@ -138,6 +141,7 @@ impl Default for ProjectSettings {
             platform: Platform::Paper,
             versions: Versions::default_for(Platform::Paper),
             deploy_dir: String::new(),
+            deploy_clean: false,
             pack: PackSettings::default(),
         }
     }
@@ -255,6 +259,28 @@ pub struct Project {
     /// Chat commands; each one becomes an event block "Command · /name".
     #[serde(default)]
     pub commands: Vec<CommandDef>,
+    /// Settings that end up in the plugin's config.yml (server owners can change them).
+    #[serde(default)]
+    pub config: Vec<ConfigEntry>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ConfigType {
+    #[default]
+    Text,
+    Number,
+    Bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ConfigEntry {
+    pub key: String,
+    #[serde(default)]
+    pub ty: ConfigType,
+    #[serde(default)]
+    pub value: String,
+    #[serde(default)]
+    pub description: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -386,6 +412,7 @@ impl Default for Project {
             workspaces: vec![Workspace::new("Start")],
             next_id: 1,
             commands: vec![],
+            config: vec![],
         }
     }
 }

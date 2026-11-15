@@ -946,11 +946,12 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 sw: 0,
                 se: 0,
             },
-            blend(theme::NODE_HEADER, cat, 0.10),
+            blend(theme::NODE_HEADER, cat, 0.16),
         ));
+        // Colored line under the header in the category color.
         shapes.push(Shape::line_segment(
             [hrect.left_bottom(), hrect.right_bottom()],
-            Stroke::new(1.0, theme::NODE_BORDER),
+            Stroke::new(1.5, cat.gamma_multiply(0.55)),
         ));
         if unsupported {
             shapes.push(Shape::rect_filled(

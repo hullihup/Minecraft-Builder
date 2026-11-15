@@ -138,14 +138,20 @@ fn run(
         .to_string()
     })?;
     send(tx, Level::Info, format!("Java: {}", java.display()));
+    let first = !crate::tools::gradle_ready();
     send(
         tx,
         Level::Info,
-        crate::i18n::t(
-            "Starte Gradle… Der erste Build lädt Gradle, Java und Minecraft-Dateien herunter und kann einige Minuten dauern.",
-            "Starting Gradle… The first build downloads Gradle, Java and Minecraft files and can take a few minutes.",
-        ),
+        if first {
+            crate::i18n::t(
+                "Starte Gradle… Beim allerersten Build werden Gradle und die Minecraft-Dateien heruntergeladen – das dauert einmalig einige Minuten.",
+                "Starting Gradle… The very first build downloads Gradle and the Minecraft files – this takes a few minutes once.",
+            )
+        } else {
+            crate::i18n::t("Baue …", "Building …")
+        },
     );
+    let started = std::time::Instant::now();
 
     let mut cmd = if cfg!(windows) {
         let mut c = Command::new("cmd");
@@ -207,23 +213,128 @@ fn run(
     }
 
     let jar = find_jar(&dir.join("build/libs")).ok_or("Keine .jar-Datei in build/libs gefunden")?;
+    send(
+        tx,
+        Level::Info,
+        format!(
+            "{} {:.0} s",
+            crate::i18n::t("Build fertig nach", "Build finished after"),
+            started.elapsed().as_secs_f32()
+        ),
+    );
     if !project.settings.deploy_dir.trim().is_empty() {
-        let target_dir = PathBuf::from(project.settings.deploy_dir.trim());
-        let target = target_dir.join(jar.file_name().unwrap());
-        match std::fs::create_dir_all(&target_dir).and_then(|_| std::fs::copy(&jar, &target)) {
-            Ok(_) => send(
-                tx,
-                Level::Done,
-                format!("Kopiert nach {}", target.display()),
-            ),
-            Err(e) => send(
-                tx,
-                Level::Warn,
-                format!("Kopieren nach {} fehlgeschlagen: {e}", target_dir.display()),
-            ),
-        }
+        deploy(project, &jar, tx);
     }
     Ok(jar)
+}
+
+/// Copies the jar into the server folder, replacing older jars of the same plugin/mod.
+fn deploy(project: &Project, jar: &Path, tx: &Sender<Msg>) {
+    let s = &project.settings;
+    let target_dir = PathBuf::from(s.deploy_dir.trim());
+    if let Err(e) = std::fs::create_dir_all(&target_dir) {
+        send(tx, Level::Warn, format!("{}: {e}", target_dir.display()));
+        return;
+    }
+    let name = jar.file_name().unwrap().to_string_lossy().to_string();
+    // Remove older versions (e.g. meinplugin-1.0.0.jar when 1.1.0 is built).
+    let prefix = format!("{}-", s.id);
+    if let Ok(rd) = std::fs::read_dir(&target_dir) {
+        for e in rd.filter_map(|e| e.ok()) {
+            let n = e.file_name().to_string_lossy().to_string();
+            let rest = n.strip_prefix(&prefix).and_then(|r| r.strip_suffix(".jar"));
+            let is_version = rest
+                .map(|r| {
+                    r.chars()
+                        .next()
+                        .map(|c| c.is_ascii_digit())
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false);
+            if is_version && n != name && std::fs::remove_file(e.path()).is_ok() {
+                send(
+                    tx,
+                    Level::Info,
+                    format!(
+                        "{} {n}",
+                        crate::i18n::t("Alte Version entfernt:", "Removed old version:")
+                    ),
+                );
+            }
+        }
+    }
+    let target = target_dir.join(&name);
+    match std::fs::copy(jar, &target) {
+        Ok(_) => send(
+            tx,
+            Level::Done,
+            format!(
+                "{} {}",
+                crate::i18n::t("Auf den Server kopiert:", "Copied to the server:"),
+                target.display()
+            ),
+        ),
+        Err(e) => {
+            send(
+                tx,
+                Level::Warn,
+                format!(
+                    "{} ({e}). {}",
+                    crate::i18n::t(
+                        "Die .jar konnte nicht ersetzt werden",
+                        "The jar could not be replaced"
+                    ),
+                    crate::i18n::t(
+                        "Läuft der Server noch? Stoppe ihn und baue erneut.",
+                        "Is the server still running? Stop it and build again."
+                    )
+                ),
+            );
+            return;
+        }
+    }
+    if s.deploy_clean {
+        // Data folder of the plugin / config of the mod.
+        let folders: Vec<PathBuf> = match s.platform {
+            Platform::Paper => vec![target_dir.join(s.name.replace(' ', "_"))],
+            Platform::Fabric => match target_dir.parent() {
+                Some(root) => vec![
+                    root.join("config").join(&s.id),
+                    root.join("config").join(format!("{}.properties", s.id)),
+                ],
+                None => vec![],
+            },
+        };
+        for f in folders {
+            let r = if f.is_dir() {
+                std::fs::remove_dir_all(&f)
+            } else if f.is_file() {
+                std::fs::remove_file(&f)
+            } else {
+                continue;
+            };
+            match r {
+                Ok(()) => send(
+                    tx,
+                    Level::Info,
+                    format!(
+                        "{} {}",
+                        crate::i18n::t("Gelöscht:", "Deleted:"),
+                        f.display()
+                    ),
+                ),
+                Err(e) => send(tx, Level::Warn, format!("{}: {e}", f.display())),
+            }
+        }
+    }
+    send(
+        tx,
+        Level::Info,
+        crate::i18n::t(
+            "Starte den Server neu (oder /reload confirm), damit die neue Version läuft.",
+            "Restart the server (or /reload confirm) to run the new version.",
+        ),
+    );
 }
 
 fn pump<R: BufRead>(r: R, tx: &Sender<Msg>, is_err: bool) {

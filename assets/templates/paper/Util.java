@@ -317,4 +317,49 @@ __COMMON__
         }
         p.openInventory(inv);
     }
+
+    // ----- settings (config.yml) --------------------------------------------------
+
+    public static String cfgText(String key, String def) {
+        return __MAIN__.INSTANCE.getConfig().getString(key, def);
+    }
+
+    public static double cfgNum(String key, double def) {
+        return __MAIN__.INSTANCE.getConfig().getDouble(key, def);
+    }
+
+    public static boolean cfgBool(String key, boolean def) {
+        return __MAIN__.INSTANCE.getConfig().getBoolean(key, def);
+    }
+
+    public static void reloadConfig() {
+        __MAIN__.INSTANCE.reloadConfig();
+    }
+
+    // ----- even more blocks ---------------------------------------------------------
+
+    public static void repeat(double times, double seconds, java.util.function.IntConsumer body) {
+        int n = (int) times;
+        if (n <= 0) return;
+        int[] i = {0};
+        Bukkit.getScheduler().runTaskTimer(__MAIN__.INSTANCE, task -> {
+            i[0]++;
+            body.accept(i[0]);
+            if (i[0] >= n) task.cancel();
+        }, 0L, Math.max(1L, (long) (seconds * 20)));
+    }
+
+    public static void clearEffects(Player p) {
+        for (PotionEffect e : new ArrayList<>(p.getActivePotionEffects())) p.removePotionEffect(e.getType());
+    }
+
+    public static void clearChat(Player p) {
+        for (int i = 0; i < 100; i++) p.sendMessage(Component.empty());
+    }
+
+    public static void dropItem(Location l, String id, double amount) {
+        Material m = Material.matchMaterial(id == null ? "" : id.trim());
+        if (m == null || !m.isItem() || m.isAir()) return;
+        l.getWorld().dropItemNaturally(l, new ItemStack(m, Math.max(1, Math.min(m.getMaxStackSize(), (int) amount))));
+    }
 }

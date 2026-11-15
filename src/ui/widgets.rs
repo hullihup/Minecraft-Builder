@@ -90,6 +90,25 @@ pub fn field_editor(
                     }
                 });
         }
+        FieldKind::ConfigKey => {
+            let keys = config_keys();
+            let shown = if v.is_empty() {
+                t("(auswählen)", "(pick one)").to_string()
+            } else {
+                v.clone()
+            };
+            egui::ComboBox::from_id_salt(id_salt).width(width).selected_text(shown).show_ui(ui, |ui| {
+                if keys.is_empty() {
+                    ui.label(egui::RichText::new(t(
+                        "Noch keine Einstellungen. Lege sie in der Seitenleiste unter „Einstellungen“ an.",
+                        "No settings yet. Create them in the sidebar under “Settings”.",
+                    )).size(11.0).color(theme::TEXT_WEAK));
+                }
+                for k in &keys {
+                    ui.selectable_value(&mut v, k.clone(), k);
+                }
+            });
+        }
         FieldKind::ItemModel => {
             let models = crate::resourcepack::known_models();
             let shown = if v.is_empty() {
@@ -233,4 +252,19 @@ pub fn platform_tags(ui: &mut Ui, def: &crate::blocks::BlockDef) {
         (false, true) => pill(ui, t("nur Fabric", "Fabric only"), theme::BLUE),
         _ => {}
     }
+}
+
+static CONFIG_KEYS: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
+
+/// Keys of the project's settings, for the picker in "Einstellung lesen".
+pub fn set_config_keys(keys: Vec<String>) {
+    if let Ok(mut w) = CONFIG_KEYS.write() {
+        if *w != keys {
+            *w = keys;
+        }
+    }
+}
+
+pub fn config_keys() -> Vec<String> {
+    CONFIG_KEYS.read().map(|k| k.clone()).unwrap_or_default()
 }

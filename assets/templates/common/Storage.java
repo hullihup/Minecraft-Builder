@@ -73,4 +73,10 @@ public final class Storage {
         DATA.setProperty("t." + key, value == null ? "" : value);
         save();
     }
+
+    public static synchronized void remove(String key) {
+        DATA.remove(key);
+        DATA.remove("t." + key);
+        save();
+    }
 }

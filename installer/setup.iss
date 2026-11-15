@@ -4,7 +4,7 @@
 
 #define AppName "Minecraft Builder"
 #ifndef AppVersion
-  #define AppVersion "0.3.0"
+  #define AppVersion "0.3.1"
 #endif
 #define AppExe "minecraft-builder.exe"
 

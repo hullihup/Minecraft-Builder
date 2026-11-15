@@ -277,6 +277,8 @@ pub enum FieldKind {
     Choice(&'static [(&'static str, L)]),
     /// Item model id, with a picker listing the models of the project's resource pack.
     ItemModel,
+    /// Key of a project setting (config.yml), with a picker.
+    ConfigKey,
 }
 
 #[derive(Clone, Debug)]
@@ -2072,6 +2074,401 @@ fn build_all() -> Vec<BlockDef> {
         .i("player", p_player, T::Player, "")
         .paper("${in:player}.closeInventory();")
         .fabric("${in:player}.closeContainer();"),
+    );
+
+    // ------------------------------------------------------- Settings & more
+    v.push(
+        b("config_get", C::Server, K::Value,
+            ("Einstellung lesen", "Read setting"),
+            ("Liest einen Wert aus der config.yml. Einstellungen legst du in der Seitenleiste unter „Einstellungen“ an – Server-Besitzer können sie dann ohne neuen Build ändern.",
+             "Reads a value from config.yml. Create settings in the sidebar under “Settings” – server owners can then change them without a new build."))
+            .f("key", ("Einstellung", "Setting"), F::ConfigKey, "")
+            .o("text", ("Text", "Text"), T::Text)
+            .o("number", ("Zahl", "Number"), T::Number)
+            .o("bool", ("Ja/Nein", "Yes/No"), T::Bool)
+            .bout("text", "Util.cfgText(${s:key}, ${cfgdef:text})")
+            .bout("number", "Util.cfgNum(${s:key}, ${cfgdef:num})")
+            .bout("bool", "Util.cfgBool(${s:key}, ${cfgdef:bool})"),
+    );
+    v.push(
+        b("config_reload", C::Server, K::Action,
+            ("Einstellungen neu laden", "Reload settings"),
+            ("Liest die config.yml neu ein, damit Änderungen ohne Server-Neustart gelten. Praktisch in einem /reload-Befehl.",
+             "Reads config.yml again so changes apply without a server restart. Handy in a /reload command."))
+            .both("Util.reloadConfig();"),
+    );
+    v.push(
+        b(
+            "ev_respawn",
+            C::Events,
+            K::Event,
+            ("Spieler respawnt", "Player respawns"),
+            (
+                "Wird ausgelöst, nachdem ein Spieler nach dem Tod wieder erscheint.",
+                "Fires after a player reappears after dying.",
+            ),
+        )
+        .o("player", p_player, T::Player)
+        .listener("org.bukkit.event.player.PlayerRespawnEvent", false)
+        .pout("player", "event.getPlayer()")
+        .fabric(
+            "ServerPlayerEvents.AFTER_RESPAWN.register((__old, __new, __alive) -> {\n${body}\n});",
+        )
+        .fout("player", "__new")
+        .fimp("net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents"),
+    );
+    v.push(
+        b(
+            "ev_world_change",
+            C::Events,
+            K::Event,
+            ("Spieler wechselt Welt", "Player changes world"),
+            (
+                "Wird ausgelöst, wenn ein Spieler z. B. in den Nether geht. Nur Paper.",
+                "Fires when a player e.g. enters the Nether. Paper only.",
+            ),
+        )
+        .o("player", p_player, T::Player)
+        .o("from", ("Von Welt", "From world"), T::Text)
+        .o("to", ("Nach Welt", "To world"), T::Text)
+        .listener("org.bukkit.event.player.PlayerChangedWorldEvent", false)
+        .pout("player", "event.getPlayer()")
+        .pout("from", "event.getFrom().getName()")
+        .pout("to", "event.getPlayer().getWorld().getName()"),
+    );
+    v.push(
+        b(
+            "ev_sneak",
+            C::Events,
+            K::Event,
+            ("Spieler schleicht", "Player sneaks"),
+            (
+                "Wird ausgelöst, wenn ein Spieler anfängt zu schleichen (Shift). Nur Paper.",
+                "Fires when a player starts sneaking (Shift). Paper only.",
+            ),
+        )
+        .o("player", p_player, T::Player)
+        .listener("org.bukkit.event.player.PlayerToggleSneakEvent", true)
+        .paper("if (!event.isSneaking()) return;")
+        .pout("player", "event.getPlayer()"),
+    );
+    v.push(
+        b("ev_drop", C::Events, K::Event,
+            ("Item fallen gelassen", "Item dropped"),
+            ("Wird ausgelöst, wenn ein Spieler ein Item wegwirft. Kann abgebrochen werden. Nur Paper.", "Fires when a player drops an item. Can be cancelled. Paper only."))
+            .o("player", p_player, T::Player)
+            .o("item", ("Item-ID", "Item id"), T::Text)
+            .listener("org.bukkit.event.player.PlayerDropItemEvent", true)
+            .pout("player", "event.getPlayer()")
+            .pout("item", "Util.itemId(event.getItemDrop().getItemStack())"),
+    );
+    v.push(
+        b("ev_pvp", C::Events, K::Event,
+            ("Spieler schlägt Spieler", "Player hits player"),
+            ("Wird ausgelöst, wenn ein Spieler einen anderen schlägt. Abbrechen = kein Schaden (PvP aus). Nur Paper.",
+             "Fires when a player hits another player. Cancel = no damage (PvP off). Paper only."))
+            .o("player", ("Angreifer", "Attacker"), T::Player)
+            .o("victim", ("Opfer", "Victim"), T::Player)
+            .o("damage", ("Schaden", "Damage"), T::Number)
+            .listener("org.bukkit.event.entity.EntityDamageByEntityEvent", true)
+            .paper("if (!(event.getDamager() instanceof org.bukkit.entity.Player) || !(event.getEntity() instanceof org.bukkit.entity.Player)) return;")
+            .pout("player", "(org.bukkit.entity.Player) event.getDamager()")
+            .pout("victim", "(org.bukkit.entity.Player) event.getEntity()")
+            .pout("damage", "event.getDamage()"),
+    );
+    v.push(
+        b(
+            "ev_levelup",
+            C::Events,
+            K::Event,
+            ("Level aufgestiegen", "Level up"),
+            (
+                "Wird ausgelöst, wenn das XP-Level eines Spielers steigt. Nur Paper.",
+                "Fires when a player's XP level rises. Paper only.",
+            ),
+        )
+        .o("player", p_player, T::Player)
+        .o("level", ("Neues Level", "New level"), T::Number)
+        .listener("org.bukkit.event.player.PlayerLevelChangeEvent", false)
+        .paper("if (event.getNewLevel() <= event.getOldLevel()) return;")
+        .pout("player", "event.getPlayer()")
+        .pout("level", "event.getNewLevel()"),
+    );
+    v.push(
+        b("repeat_delay", C::Flow, K::Flow,
+            ("Wiederholen mit Pause", "Repeat with pause"),
+            ("Führt „Schleife“ X-mal aus und wartet dazwischen – ideal für Countdowns (3 … 2 … 1 …).",
+             "Runs “Loop” X times with a pause in between – ideal for countdowns (3 … 2 … 1 …)."))
+            .i("times", ("Anzahl", "Times"), T::Number, "3")
+            .i("seconds", ("Pause (Sek.)", "Pause (sec.)"), T::Number, "1")
+            .o("loop", ("Schleife", "Loop"), T::Exec)
+            .o("index", ("Durchlauf", "Index"), T::Number)
+            .both("Util.repeat(${in:times}, ${in:seconds}, __i${id} -> {\n    final double ${out:index} = __i${id};\n${exec:loop}\n});"),
+    );
+    v.push(
+        b(
+            "set_food",
+            C::Player,
+            K::Action,
+            ("Hunger setzen", "Set food"),
+            (
+                "Setzt die Hungerleiste (20 = voll).",
+                "Sets the food bar (20 = full).",
+            ),
+        )
+        .i("player", p_player, T::Player, "")
+        .i("food", ("Hunger", "Food"), T::Number, "20")
+        .paper("${in:player}.setFoodLevel((int) ${in:food});")
+        .fabric("${in:player}.getFoodData().setFoodLevel((int) ${in:food});"),
+    );
+    v.push(
+        b(
+            "give_xp",
+            C::Player,
+            K::Action,
+            ("XP geben", "Give XP"),
+            (
+                "Gibt dem Spieler Erfahrungspunkte.",
+                "Gives the player experience points.",
+            ),
+        )
+        .i("player", p_player, T::Player, "")
+        .i("amount", ("Punkte", "Points"), T::Number, "50")
+        .paper("${in:player}.giveExp((int) ${in:amount});")
+        .fabric("${in:player}.giveExperiencePoints((int) ${in:amount});"),
+    );
+    v.push(
+        b(
+            "damage",
+            C::Player,
+            K::Action,
+            ("Schaden zufügen", "Deal damage"),
+            (
+                "Fügt dem Spieler Schaden zu (2 = 1 Herz).",
+                "Damages the player (2 = 1 heart).",
+            ),
+        )
+        .i("player", p_player, T::Player, "")
+        .i("amount", ("Schaden", "Damage"), T::Number, "2")
+        .paper("${in:player}.damage(${in:amount});")
+        .fabric("Util.damage(${in:player}, ${in:amount});"),
+    );
+    v.push(
+        b(
+            "launch",
+            C::Player,
+            K::Action,
+            ("Hochschleudern", "Launch up"),
+            (
+                "Schleudert den Spieler in die Luft (1 = etwa 5 Blöcke).",
+                "Launches the player into the air (1 = about 5 blocks).",
+            ),
+        )
+        .i("player", p_player, T::Player, "")
+        .i("power", ("Stärke", "Power"), T::Number, "1")
+        .paper("${in:player}.setVelocity(${in:player}.getVelocity().setY(${in:power}));")
+        .fabric("Util.launch(${in:player}, ${in:power});"),
+    );
+    v.push(
+        b(
+            "clear_effects",
+            C::Player,
+            K::Action,
+            ("Effekte entfernen", "Clear effects"),
+            (
+                "Entfernt alle Trank-Effekte.",
+                "Removes all potion effects.",
+            ),
+        )
+        .i("player", p_player, T::Player, "")
+        .paper("Util.clearEffects(${in:player});")
+        .fabric("${in:player}.removeAllEffects();"),
+    );
+    v.push(
+        b("set_name", C::Player, K::Action,
+            ("Anzeigename setzen", "Set display name"),
+            ("Ändert den Namen im Chat und in der Tab-Liste, z. B. mit Rang: „&c[Admin] &fSteve“. Nur Paper.",
+             "Changes the name in chat and tab list, e.g. with a rank: “&c[Admin] &fSteve”. Paper only."))
+            .i("player", p_player, T::Player, "")
+            .i("name", ("Name", "Name"), T::Text, "&c[Admin] &fSteve")
+            .paper("${in:player}.displayName(Util.color(${in:name}));\n${in:player}.playerListName(Util.color(${in:name}));"),
+    );
+    v.push(
+        b(
+            "walk_speed",
+            C::Player,
+            K::Action,
+            ("Lauftempo setzen", "Set walk speed"),
+            (
+                "Ändert das Lauftempo in Prozent (100 = normal, max. 500). Nur Paper.",
+                "Changes the walk speed in percent (100 = normal, max. 500). Paper only.",
+            ),
+        )
+        .i("player", p_player, T::Player, "")
+        .i("percent", ("Prozent", "Percent"), T::Number, "150")
+        .paper(
+            "${in:player}.setWalkSpeed((float) Math.max(0, Math.min(1, ${in:percent} / 500.0)));",
+        ),
+    );
+    v.push(
+        b(
+            "clear_chat",
+            C::Messages,
+            K::Action,
+            ("Chat leeren", "Clear chat"),
+            (
+                "Schiebt den Chat des Spielers mit leeren Zeilen weg.",
+                "Pushes the player's chat away with empty lines.",
+            ),
+        )
+        .i("player", p_player, T::Player, "")
+        .both("Util.clearChat(${in:player});"),
+    );
+    v.push(
+        b(
+            "player_state",
+            C::Player,
+            K::Value,
+            ("Spieler-Status", "Player status"),
+            (
+                "Ping, Spielmodus, UUID und ob der Spieler schleicht.",
+                "Ping, game mode, UUID and whether the player sneaks.",
+            ),
+        )
+        .i("player", p_player, T::Player, "")
+        .o("ping", ("Ping (ms)", "Ping (ms)"), T::Number)
+        .o("mode", ("Spielmodus", "Game mode"), T::Text)
+        .o("sneak", ("Schleicht", "Sneaking"), T::Bool)
+        .o("uuid", ("UUID", "UUID"), T::Text)
+        .pout("ping", "${in:player}.getPing()")
+        .pout("mode", "${in:player}.getGameMode().name()")
+        .pout("sneak", "${in:player}.isSneaking()")
+        .pout("uuid", "Util.uuid(${in:player})")
+        .fout("ping", "${in:player}.connection.latency()")
+        .fout("mode", "${in:player}.gameMode().name()")
+        .fout("sneak", "${in:player}.isShiftKeyDown()")
+        .fout("uuid", "Util.uuid(${in:player})"),
+    );
+    v.push(
+        b(
+            "drop_item",
+            C::World,
+            K::Action,
+            ("Item fallen lassen", "Drop item"),
+            (
+                "Lässt Items an einer Position auf den Boden fallen.",
+                "Drops items on the ground at a location.",
+            ),
+        )
+        .i("loc", ("Position", "Location"), T::Location, "")
+        .i("item", ("Item-ID", "Item id"), T::Text, "minecraft:diamond")
+        .i("amount", ("Anzahl", "Amount"), T::Number, "1")
+        .both("Util.dropItem(${in:loc}, ${in:item}, ${in:amount});"),
+    );
+    v.push(
+        b(
+            "data_remove",
+            C::Data,
+            K::Action,
+            ("Gespeichertes löschen", "Delete stored value"),
+            (
+                "Löscht eine gespeicherte Zahl bzw. einen gespeicherten Text.",
+                "Deletes a stored number or text.",
+            ),
+        )
+        .f("scope", ("Bereich", "Scope"), F::Choice(SCOPES), "player")
+        .i("player", p_player, T::Player, "")
+        .i("key", ("Name", "Key"), T::Text, "punkte")
+        .both("Storage.remove(${storekey});"),
+    );
+    v.push(
+        b(
+            "now",
+            C::Text,
+            K::Value,
+            ("Datum & Uhrzeit", "Date & time"),
+            (
+                "Die aktuelle Zeit als Text. Format z. B. „HH:mm“ oder „dd.MM.yyyy“.",
+                "The current time as text. Format e.g. “HH:mm” or “dd.MM.yyyy”.",
+            ),
+        )
+        .i("format", ("Format", "Format"), T::Text, "HH:mm")
+        .o("res", ("Text", "Text"), T::Text)
+        .bout("res", "Util.now(${in:format})"),
+    );
+    v.push(
+        b(
+            "text_cut",
+            C::Text,
+            K::Value,
+            ("Text kürzen", "Shorten text"),
+            (
+                "Schneidet den Text nach X Zeichen ab und gibt auch seine Länge aus.",
+                "Cuts the text after X characters and also outputs its length.",
+            ),
+        )
+        .i("text", ("Text", "Text"), T::Text, "")
+        .i("max", ("Max. Zeichen", "Max. characters"), T::Number, "16")
+        .o("res", ("Text", "Text"), T::Text)
+        .o("len", ("Länge", "Length"), T::Number)
+        .bout("res", "Util.cut(${in:text}, ${in:max})")
+        .bout("len", "${in:text}.length()"),
+    );
+    v.push(
+        b("pick", C::Text, K::Value,
+            ("Zufällig aus Liste", "Random from list"),
+            ("Wählt zufällig einen Eintrag aus einer Liste mit Kommas, z. B. „Apfel, Birne, Kirsche“.", "Picks a random entry from a comma list, e.g. “apple, pear, cherry”."))
+            .i("list", ("Liste", "List"), T::Text, "Apfel, Birne, Kirsche")
+            .o("res", ("Text", "Text"), T::Text)
+            .bout("res", "Util.pick(${in:list})"),
+    );
+    v.push(
+        b(
+            "text_starts",
+            C::Logic,
+            K::Value,
+            ("Text beginnt mit", "Text starts with"),
+            (
+                "Ja, wenn der Text mit dem Anfang beginnt (Groß/klein egal).",
+                "Yes if the text starts with the prefix (ignores case).",
+            ),
+        )
+        .i("text", ("Text", "Text"), T::Text, "")
+        .i("prefix", ("Anfang", "Prefix"), T::Text, "")
+        .o("res", ("Ergebnis", "Result"), T::Bool)
+        .bout(
+            "res",
+            "${in:text}.toLowerCase().startsWith(${in:prefix}.toLowerCase())",
+        ),
+    );
+    v.push(
+        b(
+            "bool",
+            C::Logic,
+            K::Value,
+            ("Ja/Nein", "Yes/No"),
+            ("Ein fester Ja/Nein-Wert.", "A fixed yes/no value."),
+        )
+        .f("value", ("Wert", "Value"), F::Bool, "true")
+        .o("value", ("Ja/Nein", "Yes/No"), T::Bool)
+        .bout("value", "${f:value}"),
+    );
+    v.push(
+        b(
+            "clamp",
+            C::Math,
+            K::Value,
+            ("Begrenzen", "Clamp"),
+            (
+                "Hält eine Zahl zwischen Min und Max.",
+                "Keeps a number between min and max.",
+            ),
+        )
+        .i("a", ("Zahl", "Number"), T::Number, "0")
+        .i("min", ("Min", "Min"), T::Number, "0")
+        .i("max", ("Max", "Max"), T::Number, "100")
+        .o("res", ("Ergebnis", "Result"), T::Number)
+        .bout("res", "Math.max(${in:min}, Math.min(${in:max}, ${in:a}))"),
     );
 
     v.into_iter().map(|b| b.0).collect()

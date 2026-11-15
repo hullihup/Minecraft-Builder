@@ -14,6 +14,9 @@ Komplett in **Rust** geschrieben (egui), läuft als einzelne **`.exe` unter Wind
 - **Befehle-Fenster** (eigenes Fenster, wie bei XC Circuit): Befehle mit Name, Beschreibung, Aliasen, „Wer darf ihn benutzen“ (Alle / OP / Berechtigung), „Wer kann ihn ausführen“ (Spieler / Konsole) und **typisierten Optionen** (Wort, Text, Zahl, ganze Zahl, Spieler, Ja/Nein, Auswahl) – mit Pflicht-Schalter, Tab-Vorschlägen, automatischen Fehlermeldungen („… ist nicht online“, „… muss eine Zahl sein“), Vorschau „So sieht es in Minecraft aus“ und JSON-Ansicht. Jeder Befehl wird zum Event-Block „Befehl · /name“, dessen Ausgänge die Optionen sind.
 - **Block-Suche** wie bei XC: Filter Alle/Events/Aktionen/Werte, aufklappbare Kategorien mit Anzahl, „Zuletzt“ und „Favoriten“, Detailansicht mit Ein- und Ausgängen.
 - **Eigene Vektor-Icons** statt Emojis.
+- **Einstellungen (config.yml)**: In der Seitenleiste Werte anlegen (Text, Zahl, Ja/Nein) – sie landen in der `config.yml` des Plugins bzw. `config/<mod>.properties` und können auf dem Server ohne neuen Build geändert werden. Blöcke „Einstellung lesen“ und „Einstellungen neu laden“.
+- **Test-Server**: Nach jedem Build wird die `.jar` in den Server-Ordner kopiert, ältere Versionen werden ersetzt; optional wird der Plugin-Ordner gelöscht.
+- **Automatische Updates** über GitHub Releases (Hilfe → „Nach Updates suchen…“).
 - **Texturen & Modelle**: Ein **Resourcepack (.zip)** hinzufügen – Modelle und Texturen (mit Vorschau) werden angezeigt.
   - **Paper**: Das Pack wird ins Plugin eingebaut; das Plugin liefert es über einen kleinen eingebauten Webserver aus und schickt es Spielern beim Betreten automatisch (Port, Pflicht, Text einstellbar).
   - **Fabric**: Texturen und Modelle werden direkt in den Mod eingebaut.
@@ -21,7 +24,7 @@ Komplett in **Rust** geschrieben (egui), läuft als einzelne **`.exe` unter Wind
 - **Zwei Plattformen** aus demselben Projekt:
   - **Paper-Plugin** (Minecraft 26.x und 1.21.11) – für Server, Spieler brauchen nichts zu installieren.
   - **Fabric-Mod** (Minecraft 26.x) – für Fabric-Server oder Einzelspieler.
-- **96 Blöcke** in 11 Kategorien – u. a. **Inventar-Menüs** (Shops/Teleporter mit „Klick im Menü“), **Cooldown**, **Bossbar**, **Scoreboard-Seitenleiste**, **Tab-Liste**, Fliegen erlauben, Items zählen/abziehen, Wetter, „Spieler tötet Mob“, Entfernung, Zufallsspieler, Text ersetzen. Selten gebrauchte Eingänge sind am Block unter „weitere Optionen“ eingeklappt.
+- **122 Blöcke** in 11 Kategorien – u. a. **Inventar-Menüs** (Shops/Teleporter mit „Klick im Menü“), **Cooldown**, **Bossbar**, **Scoreboard-Seitenleiste**, **Tab-Liste**, Fliegen erlauben, Items zählen/abziehen, Wetter, „Spieler tötet Mob“, Entfernung, Zufallsspieler, Text ersetzen. Selten gebrauchte Eingänge sind am Block unter „weitere Optionen“ eingeklappt.
 - **Ein Klick auf „▶ Bauen“ (F5)** erzeugt die fertige `.jar` – inklusive Gradle-Projekt, das auch in IntelliJ/VS Code weiterbearbeitet werden kann.
 - **Live-Java-Vorschau**, **Probleme-Liste** mit Sprung zum Block, Konsole mit Filtern.
 
