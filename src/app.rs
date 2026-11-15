@@ -330,6 +330,10 @@ pub struct App {
     pub mcp: Option<crate::mcp::Server>,
     pub mcp_error: Option<String>,
     pub mcp_log: Vec<String>,
+    /// Result of the last "Add" / "Remove" in the Plugins panel: (ok, text).
+    pub mcp_note: Option<(bool, String)>,
+    /// State of the AI programs, checked every few seconds: (time, states).
+    pub mcp_clients: Option<(f64, Vec<(crate::mcp::Client, crate::mcp::ClientState)>)>,
     /// Test mode run, if shown.
     pub trace: Option<crate::ui::trace::Trace>,
     pub item_picker: Option<crate::ui::menu_editor::ItemPicker>,
@@ -405,6 +409,8 @@ impl App {
             mcp: None,
             mcp_error: None,
             mcp_log: vec![],
+            mcp_note: None,
+            mcp_clients: None,
             screen_edit: None,
             item_picker: None,
             allow_close: false,

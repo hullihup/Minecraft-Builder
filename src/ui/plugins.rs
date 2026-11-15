@@ -69,46 +69,126 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                 ui.label(RichText::new(e).size(11.5).color(theme::RED));
             }
         });
-    if app.settings.mcp_enabled {
-        ui.add_space(10.0);
-        let url = mcp::url(app.settings.mcp_port, &app.settings.mcp_token);
-        copy_row(ui, t("Adresse (MCP-Server, HTTP)", "Address (MCP server, HTTP)"), &url);
+    // ---- one click per AI program
+    ui.add_space(12.0);
+    section_header(ui, t("Zu einer KI hinzufügen", "Add to an AI program"));
+    ui.add_space(2.0);
+    hint(
+        ui,
+        t(
+            "„Hinzufügen“ trägt den Builder automatisch in die Einstellungen des Programms ein. Danach das Programm einmal neu starten – fertig.",
+            "“Add” enters the builder into the program's settings automatically. Then restart the program once – done.",
+        ),
+    );
+    ui.add_space(6.0);
+    let now = ui.ctx().input(|i| i.time);
+    if app.mcp_clients.as_ref().map(|(at, _)| now - *at > 3.0).unwrap_or(true) {
+        app.mcp_clients = Some((now, mcp::Client::ALL.iter().map(|c| (*c, c.state())).collect()));
+    }
+    let states = app.mcp_clients.clone().map(|c| c.1).unwrap_or_default();
+    let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("minecraft-builder"));
+    for (client, state) in states {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(client.label()).strong());
+            let (txt, col) = match state {
+                mcp::ClientState::Added => (t("Hinzugefügt", "Added"), theme::GREEN),
+                mcp::ClientState::NotAdded => (t("Nicht hinzugefügt", "Not added"), theme::TEXT_WEAK),
+                mcp::ClientState::NotInstalled => (
+                    t("Nicht auf diesem Computer gefunden", "Not found on this computer"),
+                    theme::TEXT_WEAK,
+                ),
+            };
+            ui.label(RichText::new(txt).size(11.5).color(col));
+        });
+        let add = state != mcp::ClientState::Added;
+        let label = if add { t("Hinzufügen", "Add") } else { t("Entfernen", "Remove") };
+        let btn = if add && state == mcp::ClientState::NotAdded {
+            egui::Button::new(RichText::new(label).color(Color32::BLACK).strong()).fill(theme::ACCENT)
+        } else {
+            egui::Button::new(label)
+        }
+        .corner_radius(6)
+        .min_size(egui::vec2(96.0, 28.0));
+        if ui.add(btn).clicked() {
+            let res = client.set(add, &exe);
+            app.mcp_note = Some(match res {
+                Ok(()) if add => {
+                    // The AI needs the server: switch MCP on.
+                    if !app.settings.mcp_enabled {
+                        app.settings.mcp_enabled = true;
+                        app.mcp_error = None;
+                        app.settings.save();
+                    }
+                    (
+                        true,
+                        format!(
+                            "{} {} – {}",
+                            t("Zu", "Added to"),
+                            client.label(),
+                            t(
+                                "hinzugefügt. Starte das Programm jetzt neu (ganz beenden, auch im Infobereich).",
+                                "Restart the program now (quit it completely, in the tray too)."
+                            )
+                        ),
+                    )
+                }
+                Ok(()) => (true, format!("{} {}", t("Entfernt aus", "Removed from"), client.label())),
+                Err(e) => (false, e),
+            });
+            app.mcp_clients = None;
+        }
+        ui.add_space(6.0);
+    }
+    if let Some((ok, text)) = &app.mcp_note {
+        egui::Frame::new()
+            .fill(if *ok { theme::ACCENT_BG } else { theme::RED.gamma_multiply(0.15) })
+            .corner_radius(6)
+            .inner_margin(8)
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(RichText::new(text).size(12.0).color(if *ok { theme::TEXT } else { theme::RED }));
+            });
+        ui.add_space(6.0);
+    }
+    egui::CollapsingHeader::new(RichText::new(t("Andere MCP-Programme", "Other MCP programs")).size(12.5)).show(ui, |ui| {
         copy_row(
             ui,
-            t("Für Claude Code (im Terminal einfügen)", "For Claude Code (paste into the terminal)"),
-            &format!("claude mcp add --transport http minecraft-builder {url}"),
+            t("In die MCP-Einstellungen des Programms einfügen", "Paste into the program's MCP settings"),
+            &mcp::generic_config(&exe),
         );
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(t("Port", "Port")).size(12.0));
-            let mut port = app.settings.mcp_port;
-            if ui
-                .add(egui::DragValue::new(&mut port).range(1024..=65535))
-                .changed()
-            {
-                app.settings.mcp_port = port;
-                app.mcp = None;
-            }
-            if ui
-                .small_button(t("Neue Adresse", "New address"))
-                .on_hover_text(t(
-                    "Erzeugt einen neuen geheimen Teil der Adresse. Die alte Adresse geht dann nicht mehr.",
-                    "Creates a new secret part of the address. The old address stops working.",
-                ))
-                .clicked()
-            {
-                app.settings.mcp_token = mcp::new_token();
-                app.mcp = None;
-                app.settings.save();
-            }
-        });
-        hint(
-            ui,
-            t(
-                "Der Server ist nur von diesem Computer aus erreichbar. Wer die Adresse kennt, kann dein offenes Projekt ändern – gib sie nicht weiter.",
-                "The server can only be reached from this computer. Whoever knows the address can change your open project – do not share it.",
-            ),
-        );
-    }
+        if app.settings.mcp_enabled {
+            let url = mcp::url(app.settings.mcp_port, &app.settings.mcp_token);
+            copy_row(ui, t("Oder direkt per HTTP-Adresse", "Or directly by HTTP address"), &url);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(t("Port", "Port")).size(12.0));
+                let mut port = app.settings.mcp_port;
+                if ui.add(egui::DragValue::new(&mut port).range(1024..=65535)).changed() {
+                    app.settings.mcp_port = port;
+                    app.mcp = None;
+                    app.mcp_error = None;
+                }
+                if ui
+                    .small_button(t("Neue Adresse", "New address"))
+                    .on_hover_text(t(
+                        "Erzeugt einen neuen geheimen Teil der Adresse. Hinzugefügte Programme funktionieren weiter.",
+                        "Creates a new secret part of the address. Added programs keep working.",
+                    ))
+                    .clicked()
+                {
+                    app.settings.mcp_token = mcp::new_token();
+                    app.mcp = None;
+                    app.settings.save();
+                }
+            });
+        }
+    });
+    hint(
+        ui,
+        t(
+            "Die Werkzeuge der KI funktionieren, solange der Builder mit einem Projekt offen und MCP eingeschaltet ist. Der Server ist nur von diesem Computer aus erreichbar.",
+            "The AI's tools work while the builder is open with a project and MCP is switched on. The server can only be reached from this computer.",
+        ),
+    );
     ui.add_space(12.0);
     section_header(ui, t("Was die KI kann", "What the AI can do"));
     ui.add_space(4.0);

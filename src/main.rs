@@ -34,6 +34,10 @@ fn main() -> eframe::Result<()> {
         s.save();
         std::process::exit(0);
     }
+    // Started by AI programs (Claude, Cursor, VS Code …): MCP over stdin/stdout.
+    if args.get(1).map(|a| a == "--mcp-stdio").unwrap_or(false) {
+        std::process::exit(mcp::stdio_bridge());
+    }
     if args.get(1).map(|a| a == "--setup-tools").unwrap_or(false) {
         std::process::exit(tools::setup_cli());
     }

@@ -506,6 +506,229 @@ pub fn handle(app: &mut App, ctx: &egui::Context, tool: &str, args: &Value) -> R
     }
 }
 
+// ---------------------------------------------------------------------------
+// stdio bridge: `minecraft-builder --mcp-stdio`
+// ---------------------------------------------------------------------------
+
+/// Sends one JSON-RPC message to the running app. None if it cannot be reached.
+fn forward(port: u16, token: &str, body: &str) -> Option<String> {
+    let mut s = TcpStream::connect(("127.0.0.1", port)).ok()?;
+    let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(30)));
+    let req = format!(
+        "POST /mcp/{token} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    s.write_all(req.as_bytes()).ok()?;
+    s.write_all(body.as_bytes()).ok()?;
+    let mut out = Vec::new();
+    s.read_to_end(&mut out).ok()?;
+    let text = String::from_utf8_lossy(&out).to_string();
+    let (head, body) = text.split_once("\r\n\r\n")?;
+    if !head.starts_with("HTTP/1.1 200") {
+        return None;
+    }
+    Some(body.to_string())
+}
+
+/// AI programs start the builder with `--mcp-stdio` and talk MCP over stdin/stdout.
+/// The bridge answers the handshake itself and passes tool calls on to the open app.
+pub fn stdio_bridge() -> i32 {
+    use std::io::BufRead;
+    let stdin = std::io::stdin();
+    let mut stdout = std::io::stdout();
+    for line in stdin.lock().lines() {
+        let Ok(line) = line else { break };
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(msg) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(id) = msg.get("id").cloned().filter(|i| !i.is_null()) else {
+            continue; // notification
+        };
+        let result = match msg["method"].as_str().unwrap_or("") {
+            "initialize" => json!({
+                "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or("2025-03-26"),
+                "capabilities": { "tools": {} },
+                "serverInfo": { "name": "minecraft-builder", "version": env!("CARGO_PKG_VERSION") },
+                "instructions": "Minecraft Builder: a visual editor for Minecraft plugins (Paper) and mods (Fabric). The app must be open with a project. Call get_project first, find blocks with list_blocks, then add_block / connect / set_value."
+            }),
+            "ping" => json!({}),
+            "tools/list" => json!({ "tools": tools() }),
+            "tools/call" => {
+                // Settings are read every time, so a new port or address is picked up.
+                let s = crate::build::AppSettings::load();
+                let answer = if s.mcp_enabled {
+                    forward(s.mcp_port, &s.mcp_token, line)
+                } else {
+                    None
+                };
+                match answer.and_then(|a| serde_json::from_str::<Value>(&a).ok()) {
+                    Some(v) => {
+                        let _ = writeln!(stdout, "{v}");
+                        let _ = stdout.flush();
+                        continue;
+                    }
+                    None => json!({
+                        "content": [{ "type": "text", "text": "Minecraft Builder is not reachable. Ask the user to open Minecraft Builder, open a project and switch on MCP under Plugins (star icon in the left bar)." }],
+                        "isError": true
+                    }),
+                }
+            }
+            m => {
+                let _ = writeln!(
+                    stdout,
+                    "{}",
+                    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": format!("unknown method {m}") } })
+                );
+                let _ = stdout.flush();
+                continue;
+            }
+        };
+        let _ = writeln!(stdout, "{}", json!({ "jsonrpc": "2.0", "id": id, "result": result }));
+        let _ = stdout.flush();
+    }
+    0
+}
+
+// ---------------------------------------------------------------------------
+// Adding the builder to AI programs
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Client {
+    ClaudeDesktop,
+    ClaudeCode,
+    Cursor,
+    VsCode,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ClientState {
+    NotInstalled,
+    NotAdded,
+    Added,
+}
+
+pub const SERVER_NAME: &str = "minecraft-builder";
+
+fn home() -> Option<std::path::PathBuf> {
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(std::path::PathBuf::from)
+}
+
+/// Folder with the settings of desktop apps (APPDATA / Application Support / .config).
+fn app_data() -> Option<std::path::PathBuf> {
+    if cfg!(windows) {
+        std::env::var_os("APPDATA").map(std::path::PathBuf::from)
+    } else if cfg!(target_os = "macos") {
+        home().map(|h| h.join("Library/Application Support"))
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| home().map(|h| h.join(".config")))
+    }
+}
+
+impl Client {
+    pub const ALL: [Client; 4] = [Client::ClaudeDesktop, Client::ClaudeCode, Client::Cursor, Client::VsCode];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Client::ClaudeDesktop => "Claude Desktop",
+            Client::ClaudeCode => "Claude Code",
+            Client::Cursor => "Cursor",
+            Client::VsCode => "VS Code",
+        }
+    }
+
+    /// The settings file the entry goes into.
+    pub fn config(self) -> Option<std::path::PathBuf> {
+        match self {
+            Client::ClaudeDesktop => app_data().map(|d| d.join("Claude").join("claude_desktop_config.json")),
+            Client::ClaudeCode => home().map(|h| h.join(".claude.json")),
+            Client::Cursor => home().map(|h| h.join(".cursor").join("mcp.json")),
+            Client::VsCode => app_data().map(|d| d.join("Code").join("User").join("mcp.json")),
+        }
+    }
+
+    /// Is the program on this computer (its settings folder / file exists)?
+    fn installed(self) -> bool {
+        let Some(c) = self.config() else { return false };
+        match self {
+            Client::ClaudeCode => c.exists() || home().map(|h| h.join(".claude").is_dir()).unwrap_or(false),
+            _ => c.parent().map(|p| p.is_dir()).unwrap_or(false),
+        }
+    }
+
+    /// Key that holds the servers in the settings file.
+    fn key(self) -> &'static str {
+        match self {
+            Client::VsCode => "servers",
+            _ => "mcpServers",
+        }
+    }
+
+    pub fn state(self) -> ClientState {
+        if !self.installed() {
+            return ClientState::NotInstalled;
+        }
+        let added = self
+            .config()
+            .and_then(|c| std::fs::read_to_string(c).ok())
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .map(|v| v[self.key()].get(SERVER_NAME).is_some())
+            .unwrap_or(false);
+        if added { ClientState::Added } else { ClientState::NotAdded }
+    }
+
+    fn entry(self, exe: &std::path::Path) -> Value {
+        let exe = exe.display().to_string();
+        match self {
+            Client::ClaudeDesktop | Client::Cursor => json!({ "command": exe, "args": ["--mcp-stdio"] }),
+            Client::ClaudeCode | Client::VsCode => json!({ "type": "stdio", "command": exe, "args": ["--mcp-stdio"] }),
+        }
+    }
+
+    /// Writes (or removes) the builder's entry in the program's settings file.
+    /// Everything else in the file stays as it is.
+    pub fn set(self, add: bool, exe: &std::path::Path) -> Result<(), String> {
+        let path = self.config().ok_or("no settings folder")?;
+        let mut root: Value = match std::fs::read_to_string(&path) {
+            Ok(t) if !t.trim().is_empty() => serde_json::from_str(&t).map_err(|e| {
+                format!("{} ist keine gültige JSON-Datei ({e}) – sie wurde nicht verändert.", path.display())
+            })?,
+            _ => json!({}),
+        };
+        let obj = root.as_object_mut().ok_or("settings file is not an object")?;
+        let servers = obj.entry(self.key()).or_insert_with(|| json!({}));
+        let servers = servers.as_object_mut().ok_or("servers entry is not an object")?;
+        if add {
+            servers.insert(SERVER_NAME.into(), self.entry(exe));
+        } else {
+            servers.remove(SERVER_NAME);
+        }
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        // Keep a copy of the file as it was.
+        if path.exists() {
+            let _ = std::fs::copy(&path, path.with_extension("json.mcb-backup"));
+        }
+        let text = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
+        std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))
+    }
+}
+
+/// Settings text for any other MCP program.
+pub fn generic_config(exe: &std::path::Path) -> String {
+    serde_json::to_string_pretty(&json!({
+        "mcpServers": { SERVER_NAME: { "command": exe.display().to_string(), "args": ["--mcp-stdio"] } }
+    }))
+    .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -521,6 +744,33 @@ mod tests {
         s.read_to_string(&mut out).unwrap();
         let (head, body) = out.split_once("\r\n\r\n").unwrap();
         (head.lines().next().unwrap().to_string(), body.to_string())
+    }
+
+    #[test]
+    fn adds_and_removes_itself_without_touching_other_settings() {
+        let dir = std::env::temp_dir().join(format!("mcb-mcp-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".cursor")).unwrap();
+        // SAFETY: tests in this module that use HOME run in this one test only.
+        unsafe {
+            std::env::set_var("HOME", &dir);
+            std::env::set_var("USERPROFILE", &dir);
+        }
+        let cfg = Client::Cursor.config().unwrap();
+        std::fs::write(&cfg, r#"{"mcpServers":{"other":{"command":"x"}},"keep":1}"#).unwrap();
+        assert_eq!(Client::Cursor.state(), ClientState::NotAdded);
+        let exe = std::path::Path::new("/opt/mcb/minecraft-builder");
+        Client::Cursor.set(true, exe).unwrap();
+        assert_eq!(Client::Cursor.state(), ClientState::Added);
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
+        assert_eq!(v["keep"], 1);
+        assert_eq!(v["mcpServers"]["other"]["command"], "x");
+        assert_eq!(v["mcpServers"][SERVER_NAME]["args"][0], "--mcp-stdio");
+        Client::Cursor.set(false, exe).unwrap();
+        assert_eq!(Client::Cursor.state(), ClientState::NotAdded);
+        // A broken file is left alone.
+        std::fs::write(&cfg, "{ not json").unwrap();
+        assert!(Client::Cursor.set(true, exe).is_err());
+        assert_eq!(std::fs::read_to_string(&cfg).unwrap(), "{ not json");
     }
 
     #[test]
