@@ -262,7 +262,7 @@ impl<'a> Gen<'a> {
                 .and_then(|s| s.strip_suffix(EXEC_MARK))
             {
                 let mut branch = inner.clone();
-                if node.kind == "wait" {
+                if node.kind == "wait" || node.kind == "timer_start" {
                     branch.ret = "return;".into();
                 }
                 let body = self.chain(node.id, slot, &branch, stack);
@@ -384,6 +384,7 @@ impl<'a> Gen<'a> {
             | FieldKind::ItemModel
             | FieldKind::Menu
             | FieldKind::Recipe
+            | FieldKind::Screen
             | FieldKind::MenuItemId
             | FieldKind::MenuName => {
                 v.to_string()
@@ -995,6 +996,23 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                 }
             }
             Special::Recipe => {}
+            Special::Function => {
+                // "Own block": a named piece of flow, registered at start.
+                let name = value_of(ev, "name", "belohnung").to_string();
+                let var = format!("v{}_player", ev.id);
+                let mut sc = new_scope("return;");
+                sc.player = Some(var.clone());
+                sc.vars
+                    .insert((ev.id, "player".to_string()), (var.clone(), PinType::Player));
+                let body = g.chain(ev.id, "next", &sc, &mut vec![]);
+                let body = debug_first(g, ev, def, &sc, body);
+                parts.init.push(title);
+                parts
+                    .init
+                    .push(format!("Util.FUNCS.put({}, ({var}) -> {{", java_str(&name)));
+                parts.init.extend(indent(&body, 4));
+                parts.init.push("});".into());
+            }
             Special::None => match g.p {
                 Platform::Paper => {
                     let mut sc = new_scope("return;");
@@ -1615,6 +1633,8 @@ fn paper_main(pkg: &str, main: &str, parts: &Parts, pack: bool, give: bool) -> S
         o.push('\n');
     }
     o.push_str("    }\n");
+    // Bans and ranks work without any blocks wired for them.
+    o.push_str("\n    @org.bukkit.event.EventHandler\n    public void onBanCheck(final org.bukkit.event.player.AsyncPlayerPreLoginEvent event) {\n        Util.banCheck(event);\n    }\n\n    @org.bukkit.event.EventHandler(priority = org.bukkit.event.EventPriority.LOWEST)\n    public void onRankJoin(final org.bukkit.event.player.PlayerJoinEvent event) {\n        Util.applyRank(event.getPlayer());\n    }\n");
     // Menus: items stay inside unless the menu editor allows taking them.
     o.push_str("\n    @org.bukkit.event.EventHandler(priority = org.bukkit.event.EventPriority.LOW)\n    public void onMenuGuard(final org.bukkit.event.inventory.InventoryClickEvent event) {\n        Util.menuGuard(event);\n    }\n\n    @org.bukkit.event.EventHandler(priority = org.bukkit.event.EventPriority.LOW)\n    public void onMenuDragGuard(final org.bukkit.event.inventory.InventoryDragEvent event) {\n        Util.menuGuard(event);\n    }\n");
     if pack {

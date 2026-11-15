@@ -427,4 +427,47 @@ __COMMON__
             if (isOp(p)) p.sendSystemMessage(color("&8[&eDebug&8] &7" + msg));
         }
     }
+
+    // ----- own blocks, timers, money ------------------------------------------------
+
+    /** "Function" blocks by name. */
+    public static final java.util.Map<String, java.util.function.Consumer<ServerPlayer>> FUNCS = new java.util.HashMap<>();
+
+    public static void call(String name, ServerPlayer p) {
+        java.util.function.Consumer<ServerPlayer> f = FUNCS.get(name);
+        if (f == null) __MAIN__.LOGGER.warn("Unknown function: {}", name);
+        else f.accept(p);
+    }
+
+    private static final java.util.Map<String, Object> TIMERS = new java.util.HashMap<>();
+
+    /** Runs later; a new timer with the same key replaces the old one. */
+    public static void timer(String key, double seconds, Runnable run) {
+        Object token = new Object();
+        TIMERS.put(key, token);
+        Scheduler.later(Math.max(1, (int) (seconds * 20)), () -> {
+            if (TIMERS.get(key) == token) {
+                TIMERS.remove(key);
+                run.run();
+            }
+        });
+    }
+
+    public static boolean cancelTimer(String key) {
+        return TIMERS.remove(key) != null;
+    }
+
+    public static double money(ServerPlayer p) {
+        return Storage.getNum("money." + uuid(p));
+    }
+
+    public static void moneyAdd(ServerPlayer p, double amount) {
+        Storage.setNum("money." + uuid(p), Math.max(0, money(p) + amount));
+    }
+
+    public static boolean moneyTake(ServerPlayer p, double amount) {
+        if (money(p) < amount) return false;
+        Storage.setNum("money." + uuid(p), money(p) - amount);
+        return true;
+    }
 }

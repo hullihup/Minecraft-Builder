@@ -717,4 +717,198 @@ __COMMON__
             if (p.isOp()) p.sendMessage(color("&8[&eDebug&8] &7" + msg));
         }
     }
+
+    // ----- own blocks, timers -----------------------------------------------------
+
+    /** "Function" blocks by name. */
+    public static final java.util.Map<String, java.util.function.Consumer<Player>> FUNCS = new java.util.HashMap<>();
+
+    public static void call(String name, Player p) {
+        java.util.function.Consumer<Player> f = FUNCS.get(name);
+        if (f == null) __MAIN__.INSTANCE.getLogger().warning("Unknown function: " + name);
+        else f.accept(p);
+    }
+
+    private static final java.util.Map<String, org.bukkit.scheduler.BukkitTask> TIMERS = new java.util.HashMap<>();
+
+    /** Runs later; a new timer with the same key replaces the old one. */
+    public static void timer(String key, double seconds, Runnable run) {
+        cancelTimer(key);
+        TIMERS.put(key, Bukkit.getScheduler().runTaskLater(__MAIN__.INSTANCE, () -> {
+            TIMERS.remove(key);
+            run.run();
+        }, Math.max(1L, (long) (seconds * 20))));
+    }
+
+    public static boolean cancelTimer(String key) {
+        org.bukkit.scheduler.BukkitTask t = TIMERS.remove(key);
+        if (t == null) return false;
+        t.cancel();
+        return true;
+    }
+
+    // ----- bans ---------------------------------------------------------------------
+
+    /** Screen text with placeholders filled in. */
+    static Component banScreen(String text, String name, long until) {
+        long left = until < 0 ? -1 : Math.max(0, until - System.currentTimeMillis());
+        return color(text.replace("{player}", name).replace("{time}", duration(left)));
+    }
+
+    /** seconds < 0 = forever. */
+    public static void ban(Player p, double seconds, String reason) {
+        if (p == null) return;
+        long until = seconds < 0 ? -1 : System.currentTimeMillis() + (long) (seconds * 1000);
+        Storage.setText("ban." + p.getUniqueId(), until + "\u0001" + p.getName() + "\u0001" + reason);
+        Storage.setText("banname." + p.getName().toLowerCase(Locale.ROOT), p.getUniqueId().toString());
+        p.kick(banScreen(reason, p.getName(), until));
+    }
+
+    public static boolean unban(String name) {
+        String key = "banname." + (name == null ? "" : name.trim().toLowerCase(Locale.ROOT));
+        String uuid = Storage.getText(key);
+        if (uuid.isEmpty()) return false;
+        Storage.removeText("ban." + uuid);
+        Storage.removeText(key);
+        return true;
+    }
+
+    public static boolean isBanned(String name) {
+        String uuid = Storage.getText("banname." + (name == null ? "" : name.trim().toLowerCase(Locale.ROOT)));
+        return !uuid.isEmpty() && banEntry(uuid) != null;
+    }
+
+    /** {until, name, reason} or null if not banned (expired bans are removed). */
+    static String[] banEntry(String uuid) {
+        String v = Storage.getText("ban." + uuid);
+        if (v.isEmpty()) return null;
+        String[] p = v.split("\u0001", 3);
+        if (p.length < 3) return null;
+        long until = (long) num(p[0]);
+        if (until >= 0 && until <= System.currentTimeMillis()) {
+            Storage.removeText("ban." + uuid);
+            return null;
+        }
+        return p;
+    }
+
+    public static void banCheck(org.bukkit.event.player.AsyncPlayerPreLoginEvent event) {
+        String[] e = banEntry(event.getUniqueId().toString());
+        if (e == null) return;
+        event.disallow(org.bukkit.event.player.AsyncPlayerPreLoginEvent.Result.KICK_BANNED,
+                banScreen(e[2], event.getName(), (long) num(e[0])));
+    }
+
+    /** Is the location inside the box between two corners of a world? */
+    public static boolean inBox(Location l, String world, double x1, double y1, double z1, double x2, double y2, double z2) {
+        if (l == null || l.getWorld() == null || !l.getWorld().getName().equalsIgnoreCase(world.trim())) return false;
+        return between(l.getX(), x1, x2 + 1) && between(l.getY(), y1, y2 + 1) && between(l.getZ(), z1, z2 + 1);
+    }
+
+    // ----- holograms & NPCs ---------------------------------------------------------
+
+    static NamespacedKey tagKey() {
+        return new NamespacedKey(__MAIN__.INSTANCE, "tag");
+    }
+
+    static void tag(Entity e, String key) {
+        e.getPersistentDataContainer().set(tagKey(), org.bukkit.persistence.PersistentDataType.STRING, key);
+    }
+
+    public static String tagOf(Entity e) {
+        String v = e == null ? null : e.getPersistentDataContainer().get(tagKey(), org.bukkit.persistence.PersistentDataType.STRING);
+        return v == null ? "" : v;
+    }
+
+    /** Removes holograms / NPCs with this name (in loaded chunks). */
+    public static void removeTagged(String key) {
+        for (World w : Bukkit.getWorlds()) {
+            for (Entity e : w.getEntities()) {
+                if (tagOf(e).equals(key)) e.remove();
+            }
+        }
+    }
+
+    public static void hologram(Location l, String key, String text) {
+        if (l == null || l.getWorld() == null) return;
+        removeTagged(key);
+        l.getWorld().spawn(l, org.bukkit.entity.TextDisplay.class, d -> {
+            d.text(color(text.replace("|", "\n")));
+            d.setBillboard(org.bukkit.entity.Display.Billboard.CENTER);
+            d.setPersistent(true);
+            tag(d, key);
+        });
+    }
+
+    public static void npc(Location l, String key, String name, String type) {
+        if (l == null || l.getWorld() == null) return;
+        removeTagged(key);
+        EntityType t = RegistryAccess.registryAccess().getRegistry(RegistryKey.ENTITY_TYPE).get(key(type));
+        if (t == null || !t.isSpawnable() || !t.isAlive()) t = EntityType.VILLAGER;
+        Entity e = l.getWorld().spawnEntity(l, t);
+        e.customName(color(name));
+        e.setCustomNameVisible(true);
+        e.setInvulnerable(true);
+        e.setPersistent(true);
+        e.setSilent(true);
+        if (e instanceof org.bukkit.entity.LivingEntity le) {
+            le.setAI(false);
+            le.setRemoveWhenFarAway(false);
+        }
+        tag(e, key);
+    }
+
+    // ----- money, ranks ---------------------------------------------------------------
+
+    public static double money(Player p) {
+        return Storage.getNum("money." + uuid(p));
+    }
+
+    public static void moneyAdd(Player p, double amount) {
+        Storage.setNum("money." + uuid(p), Math.max(0, money(p) + amount));
+    }
+
+    public static boolean moneyTake(Player p, double amount) {
+        if (money(p) < amount) return false;
+        Storage.setNum("money." + uuid(p), money(p) - amount);
+        return true;
+    }
+
+    public static void setPrefix(Player p, String prefix) {
+        if (p == null) return;
+        Storage.setText("prefix." + p.getUniqueId(), prefix == null ? "" : prefix);
+        applyRank(p);
+    }
+
+    public static String prefix(Player p) {
+        return p == null ? "" : Storage.getText("prefix." + p.getUniqueId());
+    }
+
+    private static final java.util.Map<java.util.UUID, org.bukkit.permissions.PermissionAttachment> PERMS = new java.util.HashMap<>();
+
+    public static void setPerm(Player p, String perm, boolean on) {
+        if (p == null || perm == null || perm.isBlank()) return;
+        String key = "perms." + p.getUniqueId();
+        java.util.Set<String> set = new java.util.TreeSet<>();
+        for (String x : Storage.getText(key).split(",")) if (!x.isBlank()) set.add(x);
+        if (on) set.add(perm.trim()); else set.remove(perm.trim());
+        Storage.setText(key, String.join(",", set));
+        applyRank(p);
+    }
+
+    /** Prefix (tab list + chat name) and stored permissions; called on join. */
+    public static void applyRank(Player p) {
+        String prefix = prefix(p);
+        Component name = prefix.isEmpty() ? Component.text(p.getName()) : color(prefix + " &r" + p.getName());
+        p.displayName(name);
+        p.playerListName(name);
+        org.bukkit.permissions.PermissionAttachment old = PERMS.remove(p.getUniqueId());
+        if (old != null) p.removeAttachment(old);
+        String perms = Storage.getText("perms." + p.getUniqueId());
+        if (!perms.isEmpty()) {
+            org.bukkit.permissions.PermissionAttachment a = p.addAttachment(__MAIN__.INSTANCE);
+            for (String x : perms.split(",")) if (!x.isBlank()) a.setPermission(x, true);
+            PERMS.put(p.getUniqueId(), a);
+        }
+    }
 }

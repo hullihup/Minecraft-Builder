@@ -244,6 +244,8 @@ pub struct App {
     pub menu_edit: Option<crate::ui::menu_editor::MenuEdit>,
     /// Recipe block being edited: (workspace, node).
     pub recipe_edit: Option<(usize, NodeId)>,
+    /// "Reason (screen)" block being edited: (workspace, node).
+    pub screen_edit: Option<(usize, NodeId)>,
     /// Test mode run, if shown.
     pub trace: Option<crate::ui::trace::Trace>,
     pub item_picker: Option<crate::ui::menu_editor::ItemPicker>,
@@ -315,6 +317,7 @@ impl App {
             menu_edit: None,
             recipe_edit: None,
             trace: None,
+            screen_edit: None,
             item_picker: None,
             allow_close: false,
             title: String::new(),
@@ -1585,6 +1588,7 @@ impl eframe::App for App {
         }
         ui::menu_editor::show(self, &ctx);
         ui::recipe_editor::show(self, &ctx);
+        ui::screen_editor::show(self, &ctx);
         ui::trace::window(self, &ctx);
         ui::menu_editor::item_picker(self, &ctx);
         ui::onboarding::show(self, &ctx);

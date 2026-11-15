@@ -144,9 +144,11 @@ pub enum Cat {
     Location,
     Files,
     Recipes,
+    Moderation,
+    Vars,
 }
 
-pub const CATEGORIES: [Cat; 14] = [
+pub const CATEGORIES: [Cat; 16] = [
     Cat::Events,
     Cat::Messages,
     Cat::Player,
@@ -156,10 +158,12 @@ pub const CATEGORIES: [Cat; 14] = [
     Cat::Logic,
     Cat::Math,
     Cat::Text,
+    Cat::Vars,
     Cat::Data,
     Cat::Files,
     Cat::Recipes,
     Cat::Resources,
+    Cat::Moderation,
     Cat::Server,
 ];
 
@@ -180,6 +184,8 @@ impl Cat {
             Cat::Location => ("Positionen", "Locations"),
             Cat::Files => ("Dateien & Einstellungen", "Files & settings"),
             Cat::Recipes => ("Rezepte", "Recipes"),
+            Cat::Moderation => ("Moderation (Bann & Kick)", "Moderation (ban & kick)"),
+            Cat::Vars => ("Variablen & Listen", "Variables & lists"),
         }
     }
     pub fn color(self) -> Color32 {
@@ -198,6 +204,8 @@ impl Cat {
             Cat::Location => Color32::from_rgb(0xFF, 0xC8, 0x4D),
             Cat::Files => Color32::from_rgb(0xFF, 0x9A, 0x3D),
             Cat::Recipes => Color32::from_rgb(0xD9, 0xA0, 0x66),
+            Cat::Moderation => Color32::from_rgb(0xFF, 0x55, 0x55),
+            Cat::Vars => Color32::from_rgb(0x7A, 0xE0, 0xC0),
         }
     }
     pub fn icon_kind(self) -> crate::ui::icons::Icon {
@@ -217,6 +225,8 @@ impl Cat {
             Cat::Location => I::Pin,
             Cat::Files => I::Folder,
             Cat::Recipes => I::Grid,
+            Cat::Moderation => I::Warning,
+            Cat::Vars => I::Box,
         }
     }
     #[allow(dead_code)]
@@ -236,6 +246,8 @@ impl Cat {
             Cat::Location => "📍",
             Cat::Files => "📁",
             Cat::Recipes => "⚒",
+            Cat::Moderation => "⛔",
+            Cat::Vars => "📦",
         }
     }
 }
@@ -302,6 +314,8 @@ pub enum FieldKind {
     Menu,
     /// Crafting recipe (grid + result), edited in the recipe editor.
     Recipe,
+    /// Text of the disconnect screen (ban / kick), edited in the screen editor.
+    Screen,
     /// ID of a slot of a menu (picked from the menu editor's IDs, empty = any).
     MenuItemId,
     /// Name of a menu, picked from the "Open menu" blocks of the project.
@@ -329,6 +343,8 @@ pub enum Special {
     Timer,
     /// Adds a crafting recipe when the plugin / mod starts (no flow needed).
     Recipe,
+    /// A named flow that "Run own block" starts.
+    Function,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -612,6 +628,31 @@ const WEATHER: &[(&str, L)] = &[
     ("clear", ("Sonne", "Clear")),
     ("rain", ("Regen", "Rain")),
     ("thunder", ("Gewitter", "Thunder")),
+];
+
+const BAN_CATEGORIES: &[(&str, L)] = &[
+    ("Hacking", ("Hacking / Cheats", "Hacking / cheats")),
+    ("Beleidigung", ("Beleidigung", "Insults")),
+    ("Spam", ("Spam", "Spam")),
+    ("Werbung", ("Werbung", "Advertising")),
+    ("Griefing", ("Griefing", "Griefing")),
+    ("Bugusing", ("Bugusing", "Bug abuse")),
+    ("Teaming", ("Teaming", "Teaming")),
+    ("Skin / Name", ("Unangemessener Skin / Name", "Inappropriate skin / name")),
+    ("Sicherheit", ("Account-Sicherheit", "Account security")),
+    ("Sonstiges", ("Sonstiges", "Other")),
+];
+
+const BAN_UNITS: &[(&str, L)] = &[
+    ("60", ("Minuten", "Minutes")),
+    ("3600", ("Stunden", "Hours")),
+    ("86400", ("Tage", "Days")),
+    ("-1", ("Für immer", "Forever")),
+];
+
+const AREA_MODES: &[(&str, L)] = &[
+    ("enter", ("Beim Betreten", "On entering")),
+    ("leave", ("Beim Verlassen", "On leaving")),
 ];
 
 const MENU_SCOPES: &[(&str, L)] = &[
@@ -2343,6 +2384,403 @@ fn build_all() -> Vec<BlockDef> {
             .fa("discover", ("Im Rezeptbuch freischalten (Paper)", "Unlock in recipe book (Paper)"), F::Bool, "true")
             .paper_empty()
             .fabric_empty(),
+    );
+
+
+    // ------------------------------------------------------------- Moderation
+    v.push(
+        b("reason", C::Moderation, K::Value,
+            ("Grund (Bildschirm)", "Reason (screen)"),
+            ("Der Text, den ein Spieler beim Bann oder Kick auf dem „Verbindung getrennt“-Bildschirm sieht. Mit „Bildschirm bearbeiten“ gestaltest du ihn mit Farben und Zeilen; {time} wird zur Restzeit, {player} zum Namen, {category} zur Kategorie. Verbinde „Grund“ mit „Bannen“ oder „Kicken“.",
+             "The text a player sees on the “Disconnected” screen when banned or kicked. “Edit screen” lets you design it with colors and lines; {time} becomes the time left, {player} the name, {category} the category. Connect “Reason” to “Ban” or “Kick”."))
+            .f("category", ("Kategorie", "Category"), F::Choice(BAN_CATEGORIES), "Hacking")
+            .f("screen", ("Bildschirm", "Screen"), F::Screen, "&cDu bist für &f{time} &cvon diesem Server gebannt!\n\n&7Grund: &f{category}\n&7Einspruch: &bdiscord.gg/deinserver")
+            .o("reason", ("Grund", "Reason"), T::Text)
+            .h(("Der fertige Bildschirm-Text. Verbinde ihn mit dem Eingang „Grund“ von „Bannen“ oder „Kicken“.", "The finished screen text. Connect it to the “Reason” input of “Ban” or “Kick”."))
+            .pout("reason", "${s:screen}.replace(\"{category}\", \"${f:category}\")")
+            .fout("reason", "${s:screen}.replace(\"{category}\", \"${f:category}\")"),
+    );
+    v.push(
+        b("ban", C::Moderation, K::Action,
+            ("Bannen", "Ban"),
+            ("Sperrt einen Spieler für eine bestimmte Zeit (oder für immer) aus. Er sieht sofort und bei jedem Verbindungsversuch den Grund-Bildschirm mit der Restzeit. Bleibt nach Neustart erhalten. Nur Paper.",
+             "Locks a player out for a certain time (or forever). They see the reason screen with the time left right away and on every attempt to join. Survives restarts. Paper only."))
+            .f("unit", ("Einheit", "Unit"), F::Choice(BAN_UNITS), "86400")
+            .i("player", p_player, T::Player, "")
+            .i("duration", ("Dauer", "Duration"), T::Number, "30")
+            .h(("Wie lange, in der gewählten Einheit. Bei „Für immer“ egal.", "How long, in the chosen unit. Ignored with “Forever”."))
+            .i("reason", ("Grund", "Reason"), T::Text, "&cDu bist für &f{time} &cgebannt.")
+            .h(("Text auf dem Bann-Bildschirm. Tippe ihn direkt ein oder verbinde einen „Grund (Bildschirm)“-Block. {time} = Restzeit, {player} = Name.", "Text on the ban screen. Type it in or connect a “Reason (screen)” block. {time} = time left, {player} = name."))
+            .paper("Util.ban(${in:player}, \"${f:unit}\".equals(\"-1\") ? -1 : Math.abs(${in:duration}) * ${f:unit}, ${in:reason});"),
+    );
+    v.push(
+        b("unban", C::Moderation, K::Action,
+            ("Entbannen", "Unban"),
+            ("Hebt den Bann eines Spielers auf (nach Name). „Geklappt“ sagt, ob er gebannt war. Nur Paper.",
+             "Lifts a player's ban (by name). “Worked” tells whether they were banned. Paper only."))
+            .i("name", ("Spielername", "Player name"), T::Text, "")
+            .o("ok", ("Geklappt", "Worked"), T::Bool)
+            .paper("final boolean ${out:ok} = Util.unban(${in:name});"),
+    );
+    v.push(
+        b("is_banned", C::Moderation, K::Value,
+            ("Ist gebannt?", "Is banned?"),
+            ("Ja, wenn der Spieler mit diesem Namen gerade gebannt ist. Nur Paper.", "Yes if the player with this name is banned right now. Paper only."))
+            .i("name", ("Spielername", "Player name"), T::Text, "")
+            .o("res", ("Ergebnis", "Result"), T::Bool)
+            .pout("res", "Util.isBanned(${in:name})"),
+    );
+
+    // ------------------------------------------------------ Variables & lists
+    v.push(
+        b("var_set", C::Vars, K::Action,
+            ("Variable setzen", "Set variable"),
+            ("Merkt sich einen Wert, bis der Server stoppt – z. B. „im Event“ oder „Runde läuft“. Für Dauerhaftes nimm „Zahl/Text speichern“.",
+             "Remembers a value until the server stops – e.g. “in event” or “round running”. For permanent values use “Store number/text”."))
+            .f("scope", ("Bereich", "Scope"), F::Choice(SCOPES), "player")
+            .i("player", p_player, T::Player, "")
+            .i("key", ("Name", "Name"), T::Text, "im_event")
+            .i("value", ("Wert", "Value"), T::Text, "ja")
+            .both("Util.varSet(${storekey}, ${in:value});"),
+    );
+    v.push(
+        b("var_get", C::Vars, K::Value,
+            ("Variable", "Variable"),
+            ("Liest eine Variable (leer bzw. 0, wenn sie nicht gesetzt ist).", "Reads a variable (empty or 0 if it is not set)."))
+            .f("scope", ("Bereich", "Scope"), F::Choice(SCOPES), "player")
+            .i("player", p_player, T::Player, "")
+            .i("key", ("Name", "Name"), T::Text, "im_event")
+            .o("value", ("Wert", "Value"), T::Text)
+            .o("set", ("Gesetzt?", "Set?"), T::Bool)
+            .bout("value", "Util.varGet(${storekey})")
+            .bout("set", "(!Util.varGet(${storekey}).isEmpty())"),
+    );
+    v.push(
+        b("var_add", C::Vars, K::Action,
+            ("Variable erhöhen", "Increase variable"),
+            ("Zählt eine Zahl-Variable hoch (oder mit Minus herunter) und gibt den neuen Wert aus.", "Counts a number variable up (or down with minus) and outputs the new value."))
+            .f("scope", ("Bereich", "Scope"), F::Choice(SCOPES), "player")
+            .i("player", p_player, T::Player, "")
+            .i("key", ("Name", "Name"), T::Text, "kills")
+            .i("by", ("Um", "By"), T::Number, "1")
+            .o("value", ("Neuer Wert", "New value"), T::Number)
+            .both("final double ${out:value} = Util.varAdd(${storekey}, ${in:by});"),
+    );
+    v.push(
+        b("list_add", C::Vars, K::Action,
+            ("Zur Liste hinzufügen", "Add to list"),
+            ("Hängt einen Eintrag an eine Liste an, z. B. einen Spielernamen an „arena“. Listen gelten, bis der Server stoppt.",
+             "Appends an entry to a list, e.g. a player name to “arena”. Lists last until the server stops."))
+            .f("unique", ("Nur einmal", "Only once"), F::Bool, "true")
+            .i("key", ("Liste", "List"), T::Text, "arena")
+            .i("value", ("Eintrag", "Entry"), T::Text, "")
+            .h(("Was hinzugefügt wird. Ein verbundener Spieler wird zu seinem Namen.", "What is added. A connected player turns into their name."))
+            .both("Util.listAdd(${in:key}, ${in:value}, ${f:unique});"),
+    );
+    v.push(
+        b("list_remove", C::Vars, K::Action,
+            ("Aus Liste entfernen", "Remove from list"),
+            ("Entfernt einen Eintrag aus einer Liste.", "Removes an entry from a list."))
+            .i("key", ("Liste", "List"), T::Text, "arena")
+            .i("value", ("Eintrag", "Entry"), T::Text, "")
+            .both("Util.listRemove(${in:key}, ${in:value});"),
+    );
+    v.push(
+        b("list_clear", C::Vars, K::Action,
+            ("Liste leeren", "Clear list"),
+            ("Entfernt alle Einträge einer Liste.", "Removes all entries of a list."))
+            .i("key", ("Liste", "List"), T::Text, "arena")
+            .both("Util.listClear(${in:key});"),
+    );
+    v.push(
+        b("list_info", C::Vars, K::Value,
+            ("Liste", "List"),
+            ("Infos zu einer Liste: ob ein Eintrag drin ist, wie viele es sind, ein bestimmter Eintrag und alle als Text.",
+             "Info about a list: whether an entry is in it, how many there are, a certain entry and all of them as text."))
+            .i("key", ("Liste", "List"), T::Text, "arena")
+            .ia("value", ("Eintrag suchen", "Entry to find"), T::Text, "")
+            .ia("index", ("Nummer", "Number"), T::Number, "1")
+            .o("has", ("Enthält?", "Contains?"), T::Bool)
+            .h(("Ja, wenn „Eintrag suchen“ in der Liste steht.", "Yes if “Entry to find” is in the list."))
+            .o("size", ("Anzahl", "Count"), T::Number)
+            .o("entry", ("Eintrag Nr.", "Entry no."), T::Text)
+            .h(("Der Eintrag an der Stelle „Nummer“ (1 = erster).", "The entry at position “Number” (1 = first)."))
+            .o("all", ("Alle", "All"), T::Text)
+            .h(("Alle Einträge, mit Komma getrennt.", "All entries, separated by commas."))
+            .bout("has", "Util.listHas(${in:key}, ${in:value})")
+            .bout("size", "Util.listSize(${in:key})")
+            .bout("entry", "Util.listGet(${in:key}, ${in:index})")
+            .bout("all", "Util.listJoin(${in:key}, \", \")"),
+    );
+    v.push(
+        b("for_list", C::Vars, K::Flow,
+            ("Für jeden Eintrag", "For each entry"),
+            ("Führt „Schleife“ für jeden Eintrag einer Liste aus. Für Spielernamen passt „Spieler nach Name“ dahinter.",
+             "Runs “Loop” for every entry of a list. For player names, “Player by name” fits behind it."))
+            .i("key", ("Liste", "List"), T::Text, "arena")
+            .o("loop", ("Schleife", "Loop"), T::Exec)
+            .o("item", ("Eintrag", "Entry"), T::Text)
+            .o("next", ("Fertig", "Done"), T::Exec)
+            .both("for (final String ${out:item} : Util.listCopy(${in:key})) {\n${exec:loop}\n}"),
+    );
+    v.push(
+        b("timer_start", C::Flow, K::Flow,
+            ("Countdown starten", "Start countdown"),
+            ("Führt „Abgelaufen“ nach X Sekunden aus – pro Spieler und Name. Ein neuer Countdown mit demselben Namen ersetzt den alten; „Countdown abbrechen“ stoppt ihn (z. B. wenn sich der Spieler bewegt).",
+             "Runs “Elapsed” after X seconds – per player and name. A new countdown with the same name replaces the old one; “Cancel countdown” stops it (e.g. when the player moves)."))
+            .i("player", p_player, T::Player, "")
+            .i("key", ("Name", "Name"), T::Text, "teleport")
+            .i("seconds", ("Sekunden", "Seconds"), T::Number, "5")
+            .o("done", ("Abgelaufen", "Elapsed"), T::Exec)
+            .both("Util.timer(Util.uuid(${in:player}) + \":\" + ${in:key}, ${in:seconds}, () -> {\n${exec:done}\n});"),
+    );
+    v.push(
+        b("timer_cancel", C::Flow, K::Action,
+            ("Countdown abbrechen", "Cancel countdown"),
+            ("Stoppt einen laufenden Countdown. „Lief noch“ sagt, ob es einen gab.", "Stops a running countdown. “Was running” tells whether there was one."))
+            .i("player", p_player, T::Player, "")
+            .i("key", ("Name", "Name"), T::Text, "teleport")
+            .o("ok", ("Lief noch", "Was running"), T::Bool)
+            .both("final boolean ${out:ok} = Util.cancelTimer(Util.uuid(${in:player}) + \":\" + ${in:key});"),
+    );
+    v.push(
+        b("ev_function", C::Flow, K::Event,
+            ("Eigener Block", "Own block"),
+            ("Fasst einen Ablauf unter einem Namen zusammen. Mit „Eigenen Block ausführen“ startest du ihn von überall – so musst du nichts doppelt bauen.",
+             "Bundles a flow under a name. “Run own block” starts it from anywhere – so you never build things twice."))
+            .special(Special::Function)
+            .f("name", ("Name", "Name"), F::Text, "belohnung")
+            .o("player", p_player, T::Player)
+            .paper_empty()
+            .fabric_empty(),
+    );
+    v.push(
+        b("call_function", C::Flow, K::Action,
+            ("Eigenen Block ausführen", "Run own block"),
+            ("Startet den Ablauf eines „Eigener Block“ mit diesem Namen und macht danach hier weiter.", "Starts the flow of an “Own block” with this name and continues here afterwards."))
+            .f("name", ("Name", "Name"), F::Text, "belohnung")
+            .i("player", p_player, T::Player, "")
+            .both("Util.call(${s:name}, ${in:player});"),
+    );
+    v.push(
+        b("msg", C::Files, K::Value,
+            ("Nachricht (messages.yml)", "Message (messages.yml)"),
+            ("Ein Text aus messages.yml im Datenordner. Fehlt er dort, wird er mit dem Standard angelegt – so können Server-Besitzer alle Texte ändern oder übersetzen.",
+             "A text from messages.yml in the data folder. If it is missing there, it is added with the default – so server owners can change or translate all texts."))
+            .i("key", ("Name", "Name"), T::Text, "willkommen")
+            .i("default", ("Standard", "Default"), T::Text, "&aWillkommen!")
+            .o("text", ("Text", "Text"), T::Text)
+            .bout("text", "DataFiles.msg(${in:key}, ${in:default})"),
+    );
+
+    // ------------------------------------------------------------ More events
+    v.push(
+        b("ev_click_block", C::Events, K::Event,
+            ("Block angeklickt", "Block clicked"),
+            ("Wird ausgelöst, wenn ein Spieler einen Block anklickt (z. B. ein Schild oder einen Knopf). Kann abgebrochen werden. Fabric: nur Rechtsklick.",
+             "Fires when a player clicks a block (e.g. a sign or a button). Can be cancelled. Fabric: right click only."))
+            .o("player", p_player, T::Player)
+            .o("block", ("Block-ID", "Block id"), T::Text)
+            .o("loc", ("Position", "Location"), T::Location)
+            .o("right", ("Rechtsklick?", "Right click?"), T::Bool)
+            .listener("org.bukkit.event.player.PlayerInteractEvent", true)
+            .paper("if (event.getHand() != org.bukkit.inventory.EquipmentSlot.HAND || event.getClickedBlock() == null) return;")
+            .pout("player", "event.getPlayer()")
+            .pout("block", "event.getClickedBlock().getType().getKey().toString()")
+            .pout("loc", "event.getClickedBlock().getLocation()")
+            .pout("right", "event.getAction().isRightClick()")
+            .fabric("UseBlockCallback.EVENT.register((__p, level, hand, __hit) -> {\n    if (level.isClientSide() || hand != InteractionHand.MAIN_HAND || !(__p instanceof ServerPlayer)) return InteractionResult.PASS;\n${body}\n    return __cancel[0] ? InteractionResult.FAIL : InteractionResult.PASS;\n});")
+            .fcancel("return __cancel[0] ? InteractionResult.FAIL : InteractionResult.PASS;")
+            .fout("player", "(ServerPlayer) __p")
+            .fout("block", "BuiltInRegistries.BLOCK.getKey(level.getBlockState(__hit.getBlockPos()).getBlock()).toString()")
+            .fout("loc", "new Loc((ServerLevel) level, __hit.getBlockPos().getX(), __hit.getBlockPos().getY(), __hit.getBlockPos().getZ())")
+            .fout("right", "true")
+            .fimp("net.fabricmc.fabric.api.event.player.UseBlockCallback")
+            .fimp("net.minecraft.world.InteractionHand")
+            .fimp("net.minecraft.world.InteractionResult"),
+    );
+    v.push(
+        b("ev_move", C::Events, K::Event,
+            ("Spieler bewegt sich", "Player moves"),
+            ("Wird ausgelöst, sobald ein Spieler auf einen anderen Block wechselt (nicht beim bloßen Umschauen). Kann abgebrochen werden. Nur Paper.",
+             "Fires as soon as a player steps onto another block (not when just looking around). Can be cancelled. Paper only."))
+            .o("player", p_player, T::Player)
+            .o("loc", ("Neue Position", "New location"), T::Location)
+            .listener("org.bukkit.event.player.PlayerMoveEvent", true)
+            .paper("if (!event.hasChangedBlock()) return;")
+            .pout("player", "event.getPlayer()")
+            .pout("loc", "event.getTo()"),
+    );
+    v.push(
+        b("ev_enter_area", C::Events, K::Event,
+            ("Bereich betreten", "Area entered"),
+            ("Wird ausgelöst, wenn ein Spieler den Quader zwischen zwei Ecken betritt (oder verlässt) – z. B. Spawn, Arena oder Shop. Nur Paper.",
+             "Fires when a player enters (or leaves) the box between two corners – e.g. spawn, arena or shop. Paper only."))
+            .f("mode", ("Wann", "When"), F::Choice(AREA_MODES), "enter")
+            .f("world", ("Welt", "World"), F::Text, "world")
+            .f("x1", ("Ecke 1 X", "Corner 1 X"), F::Number, "-10")
+            .f("y1", ("Ecke 1 Y", "Corner 1 Y"), F::Number, "-64")
+            .f("z1", ("Ecke 1 Z", "Corner 1 Z"), F::Number, "-10")
+            .f("x2", ("Ecke 2 X", "Corner 2 X"), F::Number, "10")
+            .f("y2", ("Ecke 2 Y", "Corner 2 Y"), F::Number, "320")
+            .f("z2", ("Ecke 2 Z", "Corner 2 Z"), F::Number, "10")
+            .o("player", p_player, T::Player)
+            .listener("org.bukkit.event.player.PlayerMoveEvent", false)
+            .paper("if (!event.hasChangedBlock()) return;\n    final boolean __in = Util.inBox(event.getTo(), ${s:world}, ${f:x1}, ${f:y1}, ${f:z1}, ${f:x2}, ${f:y2}, ${f:z2});\n    final boolean __was = Util.inBox(event.getFrom(), ${s:world}, ${f:x1}, ${f:y1}, ${f:z1}, ${f:x2}, ${f:y2}, ${f:z2});\n    if (__in == __was || __in != \"${f:mode}\".equals(\"enter\")) return;")
+            .pout("player", "event.getPlayer()"),
+    );
+    v.push(
+        b("ev_sneak", C::Events, K::Event,
+            ("Spieler schleicht", "Player sneaks"),
+            ("Wird ausgelöst, wenn ein Spieler anfängt zu schleichen (Shift). Nur Paper.", "Fires when a player starts sneaking (shift). Paper only."))
+            .o("player", p_player, T::Player)
+            .listener("org.bukkit.event.player.PlayerToggleSneakEvent", true)
+            .paper("if (!event.isSneaking()) return;")
+            .pout("player", "event.getPlayer()"),
+    );
+    v.push(
+        b("ev_jump", C::Events, K::Event,
+            ("Spieler springt", "Player jumps"),
+            ("Wird ausgelöst, wenn ein Spieler springt. Nur Paper.", "Fires when a player jumps. Paper only."))
+            .o("player", p_player, T::Player)
+            .listener("com.destroystokyo.paper.event.player.PlayerJumpEvent", true)
+            .pout("player", "event.getPlayer()"),
+    );
+    v.push(
+        b("ev_world_change", C::Events, K::Event,
+            ("Welt gewechselt", "World changed"),
+            ("Wird ausgelöst, nachdem ein Spieler in eine andere Welt gewechselt ist (z. B. Nether).", "Fires after a player changed to another world (e.g. the Nether)."))
+            .o("player", p_player, T::Player)
+            .o("world", ("Neue Welt", "New world"), T::Text)
+            .listener("org.bukkit.event.player.PlayerChangedWorldEvent", false)
+            .pout("player", "event.getPlayer()")
+            .pout("world", "event.getPlayer().getWorld().getName()")
+            .fabric("ServerEntityWorldChangeEvents.AFTER_PLAYER_CHANGE_WORLD.register((__p, __origin, __dest) -> {\n${body}\n});")
+            .fout("player", "__p")
+            .fout("world", "Util.worldName(__dest)")
+            .fimp("net.fabricmc.fabric.api.entity.event.v1.ServerEntityWorldChangeEvents"),
+    );
+    v.push(
+        b("ev_respawn", C::Events, K::Event,
+            ("Spieler respawnt", "Player respawns"),
+            ("Wird ausgelöst, wenn ein Spieler nach dem Tod wieder erscheint.", "Fires when a player reappears after dying."))
+            .o("player", p_player, T::Player)
+            .listener("org.bukkit.event.player.PlayerRespawnEvent", false)
+            .pout("player", "event.getPlayer()")
+            .fabric("ServerPlayerEvents.AFTER_RESPAWN.register((__old, __p, __alive) -> {\n${body}\n});")
+            .fout("player", "__p")
+            .fimp("net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents"),
+    );
+    v.push(
+        b("ev_pickup", C::Events, K::Event,
+            ("Item aufgehoben", "Item picked up"),
+            ("Wird ausgelöst, wenn ein Spieler ein Item vom Boden aufhebt. Kann abgebrochen werden. Nur Paper.", "Fires when a player picks an item up from the ground. Can be cancelled. Paper only."))
+            .o("player", p_player, T::Player)
+            .o("item", ("Item-ID", "Item id"), T::Text)
+            .o("model", ("Modell", "Model"), T::Text)
+            .listener("org.bukkit.event.entity.EntityPickupItemEvent", true)
+            .paper("if (!(event.getEntity() instanceof org.bukkit.entity.Player)) return;")
+            .pout("player", "(org.bukkit.entity.Player) event.getEntity()")
+            .pout("item", "Util.itemId(event.getItem().getItemStack())")
+            .pout("model", "Util.modelOf(event.getItem().getItemStack())"),
+    );
+    v.push(
+        b("ev_drop", C::Events, K::Event,
+            ("Item weggeworfen", "Item dropped"),
+            ("Wird ausgelöst, wenn ein Spieler ein Item wegwirft. Kann abgebrochen werden. Nur Paper.", "Fires when a player drops an item. Can be cancelled. Paper only."))
+            .o("player", p_player, T::Player)
+            .o("item", ("Item-ID", "Item id"), T::Text)
+            .o("model", ("Modell", "Model"), T::Text)
+            .listener("org.bukkit.event.player.PlayerDropItemEvent", true)
+            .pout("player", "event.getPlayer()")
+            .pout("item", "Util.itemId(event.getItemDrop().getItemStack())")
+            .pout("model", "Util.modelOf(event.getItemDrop().getItemStack())"),
+    );
+
+    // ---------------------------------------------- Holograms, NPCs, money, ranks
+    v.push(
+        b("hologram", C::World, K::Action,
+            ("Hologramm", "Hologram"),
+            ("Setzt schwebenden Text an eine Position. Mehrere Zeilen mit | trennen. Derselbe Name ersetzt das alte Hologramm. Nur Paper.",
+             "Puts floating text at a location. Separate several lines with |. The same name replaces the old hologram. Paper only."))
+            .i("loc", ("Position", "Location"), T::Location, "")
+            .i("key", ("Name", "Name"), T::Text, "willkommen")
+            .i("text", ("Text", "Text"), T::Text, "&6&lWillkommen!|&7Viel Spaß")
+            .paper("Util.hologram(${in:loc}, ${in:key}, ${in:text});"),
+    );
+    v.push(
+        b("npc_spawn", C::World, K::Action,
+            ("NPC hinstellen", "Place NPC"),
+            ("Stellt eine Figur hin, die sich nicht bewegt und keinen Schaden nimmt – z. B. einen Händler. Klicks fängst du mit „NPC angeklickt“ ab. Nur Paper.",
+             "Places a figure that does not move and takes no damage – e.g. a trader. Catch clicks with “NPC clicked”. Paper only."))
+            .i("loc", ("Position", "Location"), T::Location, "")
+            .i("key", ("Name (intern)", "Name (internal)"), T::Text, "haendler")
+            .i("name", ("Anzeigename", "Display name"), T::Text, "&6Händler")
+            .ia("type", ("Art", "Type"), T::Text, "minecraft:villager")
+            .paper("Util.npc(${in:loc}, ${in:key}, ${in:name}, ${in:type});"),
+    );
+    v.push(
+        b("entity_remove", C::World, K::Action,
+            ("Hologramm / NPC entfernen", "Remove hologram / NPC"),
+            ("Entfernt ein Hologramm oder einen NPC mit diesem Namen. Nur Paper.", "Removes a hologram or NPC with this name. Paper only."))
+            .i("key", ("Name", "Name"), T::Text, "haendler")
+            .paper("Util.removeTagged(${in:key});"),
+    );
+    v.push(
+        b("ev_npc_click", C::Events, K::Event,
+            ("NPC angeklickt", "NPC clicked"),
+            ("Wird ausgelöst, wenn ein Spieler einen NPC aus „NPC hinstellen“ rechtsklickt – z. B. um ein Menü zu öffnen. Nur Paper.",
+             "Fires when a player right-clicks an NPC from “Place NPC” – e.g. to open a menu. Paper only."))
+            .f("key", ("NPC-Name", "NPC name"), F::Text, "haendler")
+            .o("player", p_player, T::Player)
+            .listener("org.bukkit.event.player.PlayerInteractEntityEvent", false)
+            .paper("if (event.getHand() != org.bukkit.inventory.EquipmentSlot.HAND || !Util.tagOf(event.getRightClicked()).equals(${s:key})) return;\n    event.setCancelled(true);")
+            .pout("player", "event.getPlayer()"),
+    );
+    v.push(
+        b("money_get", C::Data, K::Value,
+            ("Kontostand", "Balance"),
+            ("Wie viel Geld der Spieler hat.", "How much money the player has."))
+            .i("player", p_player, T::Player, "")
+            .o("amount", ("Geld", "Money"), T::Number)
+            .bout("amount", "Util.money(${in:player})"),
+    );
+    v.push(
+        b("money_add", C::Data, K::Action,
+            ("Geld geben", "Give money"),
+            ("Gibt dem Spieler Geld (bleibt nach Neustart erhalten).", "Gives the player money (survives restarts)."))
+            .i("player", p_player, T::Player, "")
+            .i("amount", ("Betrag", "Amount"), T::Number, "100")
+            .both("Util.moneyAdd(${in:player}, ${in:amount});"),
+    );
+    v.push(
+        b("money_take", C::Data, K::Action,
+            ("Geld abziehen", "Take money"),
+            ("Zieht Geld ab – nur wenn der Spieler genug hat. „Geklappt“ sagt, ob es funktioniert hat (gut für Shops).",
+             "Takes money – only if the player has enough. “Worked” tells whether it worked (good for shops)."))
+            .i("player", p_player, T::Player, "")
+            .i("amount", ("Betrag", "Amount"), T::Number, "50")
+            .o("ok", ("Geklappt", "Worked"), T::Bool)
+            .both("final boolean ${out:ok} = Util.moneyTake(${in:player}, ${in:amount});"),
+    );
+    v.push(
+        b("set_prefix", C::Player, K::Action,
+            ("Rang-Präfix setzen", "Set rank prefix"),
+            ("Setzt einen Rang vor den Namen in Chat und Tab-Liste, z. B. „&c[Admin]“. Leer entfernt ihn. Bleibt nach Neustart erhalten. Nur Paper.",
+             "Puts a rank before the name in chat and tab list, e.g. “&c[Admin]”. Empty removes it. Survives restarts. Paper only."))
+            .i("player", p_player, T::Player, "")
+            .i("prefix", ("Präfix", "Prefix"), T::Text, "&c[Admin]")
+            .paper("Util.setPrefix(${in:player}, ${in:prefix});"),
+    );
+    v.push(
+        b("set_perm", C::Player, K::Action,
+            ("Berechtigung geben", "Give permission"),
+            ("Gibt oder nimmt einem Spieler eine Berechtigung, z. B. für einen deiner Befehle. Bleibt nach Neustart erhalten. Nur Paper.",
+             "Gives or takes a permission from a player, e.g. for one of your commands. Survives restarts. Paper only."))
+            .i("player", p_player, T::Player, "")
+            .i("perm", ("Berechtigung", "Permission"), T::Text, "meinplugin.vip")
+            .i("on", ("Geben", "Give"), T::Bool, "true")
+            .paper("Util.setPerm(${in:player}, ${in:perm}, ${in:on});"),
     );
 
     // ------------------------------------------------------ Files & settings

@@ -212,4 +212,10 @@ public final class DataFiles {
     public static synchronized void cfgReload(String file) {
         if (file == null || file.isBlank()) CONFIGS.clear(); else CONFIGS.remove(file);
     }
+
+    /** Text from messages.yml (added there with the default if missing), so server owners can translate it. */
+    public static synchronized String msg(String key, String def) {
+        cfgDefault("messages.yml", key, def, "");
+        return cfgText("messages.yml", key, def);
+    }
 }

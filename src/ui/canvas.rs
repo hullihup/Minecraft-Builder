@@ -99,6 +99,8 @@ enum NodeEvent {
     OpenRecipe(NodeId),
     /// Test mode for this event.
     Trace(NodeId),
+    /// Open the disconnect screen editor.
+    OpenScreen(NodeId),
     /// Connect a free flow output to this block's flow input.
     ConnectFlow {
         from: NodeId,
@@ -1000,6 +1002,36 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         // Fields
         for f in def.fields.iter().filter(|f| !f.advanced) {
             let multiline = matches!(f.kind, blocks::FieldKind::Multiline);
+            if matches!(f.kind, blocks::FieldKind::Screen) {
+                let text = node.values.get(f.id).cloned().unwrap_or_else(|| f.default.to_string());
+                let cat = node.values.get("category").cloned().unwrap_or_else(|| "Hacking".into());
+                egui::Frame::new()
+                    .inner_margin(egui::Margin::symmetric(PAD_X as i8, 2))
+                    .show(&mut nui, |ui| {
+                        let (r, resp) = ui.allocate_exact_size(vec2(inner_w, 112.0), Sense::click());
+                        crate::ui::screen_editor::draw_screen(
+                            ui,
+                            r,
+                            &crate::ui::screen_editor::preview_text(&text, &cat),
+                            0.52,
+                        );
+                        if resp.hovered() {
+                            ui.painter().rect_stroke(r, 2.0, Stroke::new(1.5, theme::ACCENT), StrokeKind::Outside);
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        if resp.clicked() {
+                            events.push(NodeEvent::OpenScreen(nid));
+                        }
+                    });
+                nui.add_space(4.0);
+                row(&mut nui, |ui| {
+                    if wide_button(ui, crate::ui::icons::Icon::Edit, t("Bildschirm bearbeiten", "Edit screen"), inner_w).clicked() {
+                        events.push(NodeEvent::OpenScreen(nid));
+                    }
+                });
+                nui.add_space(2.0);
+                continue;
+            }
             if matches!(f.kind, blocks::FieldKind::Recipe) {
                 let (rtype, cells, result, amount) = recipe_prev.get(&nid).cloned().unwrap_or_default();
                 let single = crate::recipe::single_input(&rtype);
@@ -1866,6 +1898,11 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     PinRef { node: to, pin: "in".into() },
                     true,
                 );
+            }
+            NodeEvent::OpenScreen(id) => {
+                app.selection.clear();
+                app.selection.insert(id);
+                app.screen_edit = Some((ws_idx, id));
             }
             NodeEvent::Trace(id) => {
                 let now = ctx.input(|i| i.time);

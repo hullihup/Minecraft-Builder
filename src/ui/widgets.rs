@@ -90,6 +90,17 @@ pub fn field_editor(
                     }
                 });
         }
+        FieldKind::Screen => {
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} {}",
+                    v.lines().count(),
+                    t("Zeilen", "lines")
+                ))
+                .size(11.5)
+                .color(theme::TEXT_WEAK),
+            );
+        }
         FieldKind::Recipe => {
             let r = crate::recipe::parse(&v);
             let n = r.grid.iter().filter(|g| !g.is_empty()).count();

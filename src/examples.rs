@@ -22,10 +22,11 @@ pub enum Starter {
     Homes,
     HomeMenu,
     WarpMenu,
+    Bans,
 }
 
 impl Starter {
-    pub const ALL: [Starter; 14] = [
+    pub const ALL: [Starter; 15] = [
         Starter::Empty,
         Starter::Welcome,
         Starter::Kit,
@@ -33,6 +34,7 @@ impl Starter {
         Starter::Homes,
         Starter::HomeMenu,
         Starter::WarpMenu,
+        Starter::Bans,
         Starter::Shop,
         Starter::Settings,
         Starter::Counter,
@@ -50,7 +52,7 @@ impl Starter {
     }
     pub fn supports(self, p: Platform) -> bool {
         match self {
-            Starter::Shop | Starter::Sidebar | Starter::HomeMenu | Starter::WarpMenu => {
+            Starter::Shop | Starter::Sidebar | Starter::HomeMenu | Starter::WarpMenu | Starter::Bans => {
                 p == Platform::Paper
             }
             _ => true,
@@ -72,6 +74,7 @@ impl Starter {
             Starter::Homes => ("Mehrere Homes", "Several homes"),
             Starter::HomeMenu => ("Home-Menü", "Home menu"),
             Starter::WarpMenu => ("Warp-Menü", "Warp menu"),
+            Starter::Bans => ("Bann-System", "Ban system"),
         }
     }
     pub fn desc(self) -> (&'static str, &'static str) {
@@ -129,6 +132,10 @@ impl Starter {
                 "/setwarp für OPs, /warps öffnet ein Menü mit Spawn, Arena und Shop.",
                 "/setwarp for OPs, /warps opens a menu with spawn, arena and shop.",
             ),
+            Starter::Bans => (
+                "/ban, /unban und /kick mit eigenem Bann-Bildschirm und Restzeit.",
+                "/ban, /unban and /kick with your own ban screen and time left.",
+            ),
         }
     }
     /// Short tags shown on the template card.
@@ -148,6 +155,7 @@ impl Starter {
             Starter::Homes => &[("Befehle", "Commands"), ("Positionen", "Locations")],
             Starter::HomeMenu => &[("Menü", "Menu"), ("Positionen", "Locations")],
             Starter::WarpMenu => &[("Menü", "Menu"), ("Positionen", "Locations")],
+            Starter::Bans => &[("Befehle", "Commands"), ("Moderation", "Moderation")],
         }
     }
     pub fn icon(self) -> crate::ui::icons::Icon {
@@ -167,6 +175,7 @@ impl Starter {
             Starter::Homes => I::Home,
             Starter::HomeMenu => I::Chest,
             Starter::WarpMenu => I::Pin,
+            Starter::Bans => I::Warning,
         }
     }
     pub fn color(self) -> egui::Color32 {
@@ -178,6 +187,7 @@ impl Starter {
             Starter::Kit => C::Events.color(),
             Starter::Home | Starter::Protect | Starter::Homes => C::Location.color(),
             Starter::HomeMenu | Starter::WarpMenu => C::Player.color(),
+            Starter::Bans => C::Moderation.color(),
             Starter::Shop => C::Player.color(),
             Starter::Settings => C::Files.color(),
             Starter::Wand => C::Resources.color(),
@@ -647,6 +657,53 @@ pub fn new_project(name: &str, platform: Platform, starter: Starter) -> Project 
                 &[("menu", "warps"), ("title", "&8Warps"), ("rows", "3"), ("items", items.as_str())],
             );
             b.flow(open, menu);
+        }
+        Starter::Bans => {
+            use crate::model::OptType;
+            let ban = b.command(
+                "ban",
+                "Bannt einen Spieler für Tage",
+                true,
+                &[("spieler", OptType::Player), ("tage", OptType::Number)],
+                32.0,
+                32.0,
+            );
+            let reason = b.node("reason", 32.0, 352.0, &[]);
+            let do_ban = b.node("ban", 400.0, 32.0, &[]);
+            let fm = b.node("format", 400.0, 400.0, &[("format", "&c{0} wurde für {1} Tage gebannt.")]);
+            let bc = b.node("broadcast", 720.0, 32.0, &[]);
+            b.link(ban, "opt0", do_ban, "player");
+            b.link(ban, "opt1", do_ban, "duration");
+            b.link(reason, "reason", do_ban, "reason");
+            b.link(ban, "opt0", fm, "p0");
+            b.link(ban, "opt1", fm, "p1");
+            b.link(fm, "res", bc, "text");
+            b.flow(ban, do_ban);
+            b.flow(do_ban, bc);
+
+            let unban = b.command("unban", "Hebt einen Bann auf", true, &[("name", OptType::Word)], 32.0, 760.0);
+            let do_unban = b.node("unban", 400.0, 760.0, &[]);
+            let iff = b.node("if", 720.0, 760.0, &[]);
+            let ok = b.node("send_message", 1040.0, 760.0, &[("text", "&aSpieler entbannt.")]);
+            let no = b.node("send_message", 1040.0, 980.0, &[("text", "&cDieser Spieler ist nicht gebannt.")]);
+            b.link(unban, "opt0", do_unban, "name");
+            b.flow(unban, do_unban);
+            b.flow(do_unban, iff);
+            b.link(do_unban, "ok", iff, "cond");
+            b.link(iff, "then", ok, "in");
+            b.link(iff, "else", no, "in");
+
+            let kick = b.command("kick", "Wirft einen Spieler raus", true, &[("spieler", OptType::Player)], 32.0, 1240.0);
+            let kr = b.node(
+                "reason",
+                32.0,
+                1500.0,
+                &[("category", "Spam"), ("screen", "&cDu wurdest vom Server gekickt!\n\n&7Grund: &f{category}\n&7Du kannst sofort wieder beitreten.")],
+            );
+            let do_kick = b.node("kick", 400.0, 1240.0, &[]);
+            b.link(kick, "opt0", do_kick, "player");
+            b.link(kr, "reason", do_kick, "reason");
+            b.flow(kick, do_kick);
         }
         Starter::Sidebar => {
             let j = b.node("ev_join", 32.0, 32.0, &[]);

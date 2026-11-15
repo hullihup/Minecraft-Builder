@@ -134,3 +134,78 @@
     public static boolean between(double v, double a, double b) {
         return v >= Math.min(a, b) && v <= Math.max(a, b);
     }
+
+    // ----- session variables & lists ---------------------------------------------
+
+    /** Values that live until the server stops ("Variable" blocks). */
+    public static final java.util.Map<String, String> VARS = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.Map<String, java.util.List<String>> LISTS = new java.util.concurrent.ConcurrentHashMap<>();
+
+    public static void varSet(String key, String value) {
+        if (value == null || value.isEmpty()) VARS.remove(key); else VARS.put(key, value);
+    }
+
+    public static String varGet(String key) {
+        return VARS.getOrDefault(key, "");
+    }
+
+    public static double varAdd(String key, double by) {
+        double n = num(varGet(key)) + by;
+        VARS.put(key, fmt(n));
+        return n;
+    }
+
+    private static java.util.List<String> list(String key) {
+        return LISTS.computeIfAbsent(key, k -> new java.util.concurrent.CopyOnWriteArrayList<>());
+    }
+
+    public static void listAdd(String key, String value, boolean unique) {
+        if (value == null) return;
+        if (!unique || !list(key).contains(value)) list(key).add(value);
+    }
+
+    public static void listRemove(String key, String value) {
+        list(key).remove(value);
+    }
+
+    public static void listClear(String key) {
+        LISTS.remove(key);
+    }
+
+    public static boolean listHas(String key, String value) {
+        return list(key).contains(value);
+    }
+
+    public static double listSize(String key) {
+        return list(key).size();
+    }
+
+    /** Entry number `index` (1 = first), "" if there is none. */
+    public static String listGet(String key, double index) {
+        int i = (int) index - 1;
+        java.util.List<String> l = list(key);
+        return i >= 0 && i < l.size() ? l.get(i) : "";
+    }
+
+    public static String listJoin(String key, String separator) {
+        return String.join(separator, list(key));
+    }
+
+    public static java.util.List<String> listCopy(String key) {
+        return new java.util.ArrayList<>(list(key));
+    }
+
+    // ----- own blocks ("Function") ---------------------------------------------------
+
+    /** Duration like "29d 17h 34m 51s". */
+    public static String duration(long millis) {
+        if (millis < 0) return "\u221e";
+        long s = millis / 1000;
+        long d = s / 86400, h = s % 86400 / 3600, m = s % 3600 / 60;
+        StringBuilder sb = new StringBuilder();
+        if (d > 0) sb.append(d).append("d ");
+        if (d > 0 || h > 0) sb.append(h).append("h ");
+        if (d > 0 || h > 0 || m > 0) sb.append(m).append("m ");
+        return sb.append(s % 60).append("s").toString();
+    }
+

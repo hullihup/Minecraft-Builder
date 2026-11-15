@@ -1496,6 +1496,7 @@ fn inspector(app: &mut App, ui: &mut Ui) {
         let w = ui.available_width();
         let mut open_menu = false;
         let mut open_recipe = false;
+        let mut open_screen = false;
         if !def.fields.is_empty() {
             section_header(ui, t("Einstellungen", "Settings"));
             ui.add_space(4.0);
@@ -1506,6 +1507,11 @@ fn inspector(app: &mut App, ui: &mut Ui) {
                         && icons::button(ui, Some(Icon::Chest), t("Menü bearbeiten", "Edit menu")).clicked()
                     {
                         open_menu = true;
+                    }
+                    if matches!(f.kind, blocks::FieldKind::Screen)
+                        && icons::button(ui, Some(Icon::Edit), t("Bildschirm bearbeiten", "Edit screen")).clicked()
+                    {
+                        open_screen = true;
                     }
                     if matches!(f.kind, blocks::FieldKind::Recipe)
                         && icons::button(ui, Some(Icon::Grid), t("Rezept bearbeiten", "Edit recipe")).clicked()
@@ -1602,6 +1608,9 @@ fn inspector(app: &mut App, ui: &mut Ui) {
                 delete = true;
             }
         });
+        if open_screen {
+            app.screen_edit = Some((ws_idx, id));
+        }
         if open_recipe {
             crate::ui::recipe_editor::open(app, ws_idx, id);
         }
