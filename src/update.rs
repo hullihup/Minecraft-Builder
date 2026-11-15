@@ -184,19 +184,101 @@ fn download(rel: &Release, tx: &Sender<UpdateMsg>, ctx: &egui::Context) -> Resul
     Ok(target)
 }
 
-/// Starts the installer silently. With `relaunch` the app is started again afterwards.
+fn update_dir() -> PathBuf {
+    std::env::temp_dir().join("MinecraftBuilder-Update")
+}
+
+/// Written by the update helper when the installer failed; shown at the next start.
+pub fn failure_file() -> PathBuf {
+    update_dir().join("update-failed.txt")
+}
+
+/// Installs the update after this app has closed.
+///
+/// A copy of this exe runs as helper from the temp folder: it waits until the app has
+/// really exited (the exe can be replaced), runs the installer silently into the *same*
+/// folder with the same rights (all users / only me), waits for it and starts the app
+/// again. Running the installer directly while the app was still closing failed
+/// silently because the exe was still locked.
 pub fn run_installer(path: &Path, relaunch: bool) -> Result<(), String> {
-    let mut cmd = Command::new(path);
-    cmd.args([
-        "/VERYSILENT",
-        "/SUPPRESSMSGBOXES",
-        "/NORESTART",
-        "/CLOSEAPPLICATIONS",
-    ]);
-    if relaunch {
-        cmd.arg("/RELAUNCH=1");
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let dir = update_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(failure_file());
+    let helper = dir.join(if cfg!(windows) { "mcb-update-helper.exe" } else { "mcb-update-helper" });
+    std::fs::copy(&exe, &helper).map_err(|e| e.to_string())?;
+    let mut cmd = Command::new(&helper);
+    cmd.arg("--update-helper")
+        .arg(path)
+        .arg(&exe)
+        .arg(if relaunch { "1" } else { "0" });
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // DETACHED_PROCESS: keeps running after the app is gone, no console.
+        cmd.creation_flags(0x0000_0008);
     }
     cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Has the app exited, so its exe can be replaced? An exclusive open (no sharing)
+/// fails on Windows while the exe runs; it only needs read rights, so it also works
+/// for an install under "Program Files".
+fn exe_released(exe: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new().read(true).share_mode(0).open(exe).is_ok()
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = exe;
+        true
+    }
+}
+
+/// The update helper (`--update-helper <installer> <app exe> <relaunch 0|1>`).
+pub fn helper_main(installer: &Path, app_exe: &Path, relaunch: bool) -> i32 {
+    // 1. Wait (up to 60 s) until the app has exited and its exe is no longer locked.
+    let start = std::time::Instant::now();
+    while start.elapsed().as_secs() < 60 {
+        if exe_released(app_exe) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(if cfg!(windows) { 500 } else { 2000 }));
+
+    // 2. Same folder and same rights as the installed app.
+    let dir = app_exe.parent().map(Path::to_path_buf).unwrap_or_default();
+    let probe = dir.join(".mcb-write-test");
+    let writable = std::fs::write(&probe, b"x").is_ok();
+    let _ = std::fs::remove_file(&probe);
+    let _ = std::fs::create_dir_all(update_dir());
+    let log = update_dir().join("install.log");
+    let status = Command::new(installer)
+        .args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS"])
+        .arg(if writable { "/CURRENTUSER" } else { "/ALLUSERS" })
+        .arg(format!("/DIR={}", dir.display()))
+        .arg(format!("/LOG={}", log.display()))
+        .status();
+    let ok = matches!(&status, Ok(s) if s.success());
+    if !ok {
+        let why = match &status {
+            Ok(s) => format!("exit code {:?}", s.code()),
+            Err(e) => e.to_string(),
+        };
+        let _ = std::fs::write(
+            failure_file(),
+            format!("{why}\nInstaller: {}\nLog: {}\n", installer.display(), log.display()),
+        );
+    }
+
+    // 3. Start the (new) app again.
+    if relaunch {
+        let _ = Command::new(app_exe).spawn();
+    }
+    if ok { 0 } else { 1 }
 }
 
 #[cfg(test)]

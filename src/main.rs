@@ -81,6 +81,14 @@ fn main() -> eframe::Result<()> {
             }
         }
     }
+    // minecraft-builder --update-helper <installer> <app exe> <relaunch>: installs an update (see update.rs).
+    if args.len() >= 5 && args[1] == "--update-helper" {
+        std::process::exit(update::helper_main(
+            std::path::Path::new(&args[2]),
+            std::path::Path::new(&args[3]),
+            args[4] == "1",
+        ));
+    }
     // minecraft-builder --selftest-project <paper|fabric> <file.mcb>: the self-test project as file (for tests).
     if args.len() >= 4 && args[1] == "--selftest-project" {
         let platform = if args[2] == "fabric" { model::Platform::Fabric } else { model::Platform::Paper };

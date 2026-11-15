@@ -433,6 +433,22 @@ impl App {
             ),
         );
         app.canvas.fit_request = true;
+        // The last update could not be installed: say so instead of silently staying old.
+        if let Ok(why) = std::fs::read_to_string(crate::update::failure_file()) {
+            let _ = std::fs::remove_file(crate::update::failure_file());
+            app.log(Level::Error, format!("Update fehlgeschlagen: {}", why.trim()));
+            app.dialog = Dialog::Message {
+                title: t("Update nicht installiert", "Update not installed").into(),
+                text: format!(
+                    "{}\n\n{}",
+                    t(
+                        "Das letzte Update konnte nicht installiert werden. Du kannst es unter Hilfe → Nach Updates suchen erneut versuchen oder den Installer von GitHub herunterladen und starten.",
+                        "The last update could not be installed. Try again under Help → Check for updates, or download and run the installer from GitHub.",
+                    ),
+                    why.trim()
+                ),
+            };
+        }
         if !app.settings.onboarded {
             app.onboarding = Some(0);
         }

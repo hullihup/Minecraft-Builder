@@ -27,7 +27,8 @@ SolidCompression=yes
 WizardStyle=modern
 ; Install for the current user without admin rights (can be changed in the first dialog).
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
+; "commandline": the in-app updater passes /ALLUSERS or /CURRENTUSER to keep the install folder.
+PrivilegesRequiredOverridesAllowed=dialog commandline
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 ChangesAssociations=yes
