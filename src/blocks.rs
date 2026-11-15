@@ -2649,16 +2649,12 @@ fn build_all() -> Vec<BlockDef> {
     v.push(
         b("ev_world_change", C::Events, K::Event,
             ("Welt gewechselt", "World changed"),
-            ("Wird ausgelöst, nachdem ein Spieler in eine andere Welt gewechselt ist (z. B. Nether).", "Fires after a player changed to another world (e.g. the Nether)."))
+            ("Wird ausgelöst, nachdem ein Spieler in eine andere Welt gewechselt ist (z. B. Nether). Nur Paper.", "Fires after a player changed to another world (e.g. the Nether). Paper only."))
             .o("player", p_player, T::Player)
             .o("world", ("Neue Welt", "New world"), T::Text)
             .listener("org.bukkit.event.player.PlayerChangedWorldEvent", false)
             .pout("player", "event.getPlayer()")
-            .pout("world", "event.getPlayer().getWorld().getName()")
-            .fabric("ServerEntityWorldChangeEvents.AFTER_PLAYER_CHANGE_WORLD.register((__p, __origin, __dest) -> {\n${body}\n});")
-            .fout("player", "__p")
-            .fout("world", "Util.worldName(__dest)")
-            .fimp("net.fabricmc.fabric.api.entity.event.v1.ServerEntityWorldChangeEvents"),
+            .pout("world", "event.getPlayer().getWorld().getName()"),
     );
     v.push(
         b("ev_respawn", C::Events, K::Event,
