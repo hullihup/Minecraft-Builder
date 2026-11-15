@@ -11,13 +11,86 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Activity {
+/// A panel of the editor. Every view can be docked left, right or at the bottom.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
+pub enum View {
     Workspaces,
     Blocks,
     Resources,
     Project,
     Build,
+    Plugins,
+    Inspector,
+    Code,
+    Console,
+    Problems,
+    Server,
+}
+
+/// Where a view is docked.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
+pub enum Dock {
+    Left,
+    Right,
+    Bottom,
+}
+
+pub type Activity = View;
+pub type RightTab = View;
+pub type BottomTab = View;
+
+impl View {
+    pub const ALL: [View; 11] = [
+        View::Workspaces,
+        View::Blocks,
+        View::Resources,
+        View::Project,
+        View::Build,
+        View::Plugins,
+        View::Inspector,
+        View::Code,
+        View::Console,
+        View::Problems,
+        View::Server,
+    ];
+    pub fn default_dock(self) -> Dock {
+        match self {
+            View::Inspector | View::Code => Dock::Right,
+            View::Console | View::Problems | View::Server => Dock::Bottom,
+            _ => Dock::Left,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            View::Workspaces => t("Arbeitsbereiche & Befehle", "Workspaces & commands"),
+            View::Blocks => t("Block-Bibliothek", "Block library"),
+            View::Resources => t("Texturen & Modelle", "Textures & models"),
+            View::Project => t("Projekt & Versionen", "Project & versions"),
+            View::Build => t("Bauen & Export", "Build & export"),
+            View::Plugins => t("Plugins (MCP)", "Plugins (MCP)"),
+            View::Inspector => t("Inspector", "Inspector"),
+            View::Code => t("Java-Code", "Java code"),
+            View::Console => t("Konsole", "Console"),
+            View::Problems => t("Probleme", "Problems"),
+            View::Server => t("Server-Konsole", "Server console"),
+        }
+    }
+    pub fn icon(self) -> crate::ui::icons::Icon {
+        use crate::ui::icons::Icon as I;
+        match self {
+            View::Workspaces => I::Layers,
+            View::Blocks => I::Puzzle,
+            View::Resources => I::Image,
+            View::Project => I::Sliders,
+            View::Build => I::Package,
+            View::Plugins => I::Sparkle,
+            View::Inspector => I::Gear,
+            View::Code => I::Code,
+            View::Console => I::Keyboard,
+            View::Problems => I::Warning,
+            View::Server => I::Server,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -73,19 +146,6 @@ pub struct ProjectSummary {
     pub modified: std::time::SystemTime,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum RightTab {
-    Inspector,
-    Code,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum BottomTab {
-    Console,
-    Problems,
-    Server,
-}
-
 /// Console of the project's game server, shown in the bottom panel.
 #[derive(Default)]
 pub struct ServerConsole {
@@ -116,12 +176,12 @@ pub struct LogLine {
 
 /// Pan/zoom of one workspace.
 #[derive(Clone, Copy)]
-pub struct View {
+pub struct Viewport {
     pub pan: egui::Vec2,
     pub zoom: f32,
 }
 
-impl Default for View {
+impl Default for Viewport {
     fn default() -> Self {
         Self {
             pan: egui::vec2(40.0, 40.0),
@@ -211,7 +271,7 @@ pub struct App {
     redo: Vec<Project>,
     committed: Project,
     pub active_ws: usize,
-    pub views: HashMap<usize, View>,
+    pub views: HashMap<usize, Viewport>,
     pub selection: BTreeSet<NodeId>,
     pub selected_note: Option<NodeId>,
     pub activity: Activity,
@@ -266,6 +326,10 @@ pub struct App {
     /// "Reason (screen)" block being edited: (workspace, node).
     pub screen_edit: Option<(usize, NodeId)>,
     pub server_console: ServerConsole,
+    /// Running MCP server (Plugins panel).
+    pub mcp: Option<crate::mcp::Server>,
+    pub mcp_error: Option<String>,
+    pub mcp_log: Vec<String>,
     /// Test mode run, if shown.
     pub trace: Option<crate::ui::trace::Trace>,
     pub item_picker: Option<crate::ui::menu_editor::ItemPicker>,
@@ -338,6 +402,9 @@ impl App {
             recipe_edit: None,
             trace: None,
             server_console: ServerConsole::default(),
+            mcp: None,
+            mcp_error: None,
+            mcp_log: vec![],
             screen_edit: None,
             item_picker: None,
             allow_close: false,
@@ -387,7 +454,7 @@ impl App {
         let i = self.active_ws.min(self.project.workspaces.len() - 1);
         &mut self.project.workspaces[i]
     }
-    pub fn view(&mut self) -> &mut View {
+    pub fn view(&mut self) -> &mut Viewport {
         self.views.entry(self.active_ws).or_default()
     }
 
@@ -1214,6 +1281,65 @@ impl App {
         n
     }
 
+    // ---------------------------------------------------------------- docks
+
+    pub fn dock_of(&self, v: View) -> Dock {
+        self.settings
+            .docks
+            .iter()
+            .find(|(x, _)| *x == v)
+            .map(|(_, d)| *d)
+            .unwrap_or(v.default_dock())
+    }
+
+    /// Views docked at one side, in their fixed order.
+    pub fn views_in(&self, d: Dock) -> Vec<View> {
+        View::ALL.into_iter().filter(|v| self.dock_of(*v) == d).collect()
+    }
+
+    /// The view shown in a dock (the remembered one if it is still docked there).
+    pub fn active_in(&self, d: Dock) -> Option<View> {
+        let cur = match d {
+            Dock::Left => self.activity,
+            Dock::Right => self.right_tab,
+            Dock::Bottom => self.bottom_tab,
+        };
+        let views = self.views_in(d);
+        if views.contains(&cur) {
+            Some(cur)
+        } else {
+            views.first().copied()
+        }
+    }
+
+    /// Brings a view to the front, wherever it is docked.
+    pub fn show_view(&mut self, v: View) {
+        match self.dock_of(v) {
+            Dock::Left => {
+                self.activity = v;
+                self.show_sidebar = true;
+            }
+            Dock::Right => {
+                self.right_tab = v;
+                self.show_right = true;
+            }
+            Dock::Bottom => {
+                self.bottom_tab = v;
+                self.show_bottom = true;
+            }
+        }
+    }
+
+    /// Moves a view to another side and shows it there.
+    pub fn move_view(&mut self, v: View, d: Dock) {
+        self.settings.docks.retain(|(x, _)| *x != v);
+        if d != v.default_dock() {
+            self.settings.docks.push((v, d));
+        }
+        self.settings.save();
+        self.show_view(v);
+    }
+
     pub fn delete_selection(&mut self) {
         let sel: Vec<NodeId> = self.selection.iter().copied().collect();
         for id in sel {
@@ -1373,8 +1499,7 @@ impl App {
         let out = codegen::generate(&self.project);
         if out.has_errors() {
             self.problems = out.problems;
-            self.show_bottom = true;
-            self.bottom_tab = BottomTab::Problems;
+            self.show_view(View::Problems);
             self.log(
                 Level::Error,
                 t(
@@ -1385,8 +1510,7 @@ impl App {
             return;
         }
         let dir = build::export_dir(&path, &self.project);
-        self.show_bottom = true;
-        self.bottom_tab = BottomTab::Console;
+        self.show_view(View::Console);
         self.log(
             Level::Info,
             if export_only {
@@ -1606,6 +1730,7 @@ impl eframe::App for App {
         self.vanilla.loaded_this_frame = 0;
         self.poll_jobs();
         ui::settings::poll(self, &ctx);
+        ui::plugins::poll(self, &ctx);
         self.poll_setup();
         self.poll_update(&ctx);
         if self.update.checking || self.update.downloading {
@@ -1652,6 +1777,7 @@ impl eframe::App for App {
             ui::panels::tabs(self, ui);
             ui::canvas::show(self, ui);
         });
+        ui::panels::drop_zones(self, &ctx);
         ui::dialogs::show(self, &ctx);
         if self.show_commands {
             ui::commands::show(self, &ctx);

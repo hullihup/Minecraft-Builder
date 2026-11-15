@@ -1817,7 +1817,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     app.selection.clear();
                     app.selection.insert(id);
                 }
-                app.right_tab = crate::app::RightTab::Inspector;
+                if app.dock_of(crate::app::View::Inspector) == crate::app::Dock::Right {
+                    app.right_tab = crate::app::View::Inspector;
+                }
             }
             NodeEvent::Drag { id, delta } => {
                 let ids: Vec<NodeId> = if app.selection.contains(&id) {

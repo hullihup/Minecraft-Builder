@@ -9,6 +9,7 @@ mod examples;
 mod i18n;
 mod item_render;
 mod items;
+mod mcp;
 mod model;
 mod recipe;
 mod resourcepack;

@@ -21,6 +21,8 @@ Komplett in **Rust** geschrieben (egui), läuft als einzelne **`.exe` unter Wind
   - **Fabric**: Texturen und Modelle werden direkt in den Mod eingebaut.
   - Blöcke: **„Eigenes Item geben“**, **„Rechtsklick mit eigenem Item“**, **„Modell des Items ändern“**, **„Eigenes Item anziehen / fallen lassen“**, **„Eigene Items zählen / abziehen“**, **„Resourcepack-Status“**, **„Resourcepack senden / entfernen“**. Fehlende `items/*.json`-Definitionen werden automatisch erzeugt.
 - **Menü-Editor**: Der Block „Menü öffnen“ hat den Knopf **„Menü bearbeiten“**. Im Editor stellst du Reihen und Titel ein und siehst die Kiste **wie in Minecraft**. Klick auf einen Platz öffnet die **Item-Suche über alle 1500 Items und Blöcke**; pro Platz gibt es Name, Beschreibung, Anzahl, eigenes Modell und den Schalter **„Kann herausgenommen werden“**. Items lassen sich per Ziehen verschieben. Jeder Platz kann eine **ID** bekommen; der Block „Klick im Menü“ reagiert dann nur auf dieses Item.
+- **MCP für KI-Assistenten** (Bereich „Plugins“ in der linken Leiste): Ein eingebauter MCP-Server (HTTP, nur auf diesem Computer, Adresse mit geheimem Teil). Eine KI wie Claude kann damit das offene Projekt lesen, Blöcke suchen, hinzufügen, verbinden, Werte setzen, Befehle anlegen, Probleme lesen und bauen. Für Claude Code: `claude mcp add --transport http minecraft-builder <Adresse>`.
+- **Bereiche verschieben**: Jeder Bereich (Konsole, Probleme, Server-Konsole, Inspector, Java-Code, Bauen & Export, Block-Bibliothek …) lässt sich per Ziehen des Reiters bzw. Symbols oder per Rechtsklick nach links, rechts oder unten setzen; die Anordnung wird gespeichert.
 - **Bann-System**: Blöcke „Bannen“ (Minuten/Stunden/Tage/für immer), „Entbannen“, „Ist gebannt?“ und „Grund (Bildschirm)“ mit Kategorien. Der Bildschirm-Editor zeigt den „Verbindung getrennt“-Bildschirm wie in Minecraft; `{time}` wird zur Restzeit, `{player}` zum Namen. Der Grund lässt sich mit „Bannen“ oder „Kicken“ verbinden.
 - **Variablen & Listen**: Werte bis zum Server-Stopp merken, hochzählen, Listen füllen und mit „Für jeden Eintrag“ durchgehen.
 - **Countdown** pro Spieler mit Abbrechen, **eigene Blöcke** (Ablauf unter einem Namen, von überall ausführbar), **Nachrichten aus messages.yml**.
@@ -117,6 +119,7 @@ Für alte Grafiktreiber gibt es einen OpenGL-Build: `cargo build --release --no-
 | `src/build.rs` | Export, Gradle-Aufruf, Java-Suche, Online-Versionsabfrage |
 | `src/model.rs` | Projektformat (`.mcb`, JSON) |
 | `src/resourcepack.rs` | Resourcepacks lesen, zusammenführen, Item-Regeln anwenden |
+| `src/mcp.rs` | MCP-Server für KI-Assistenten |
 | `src/server.rs` | Upload auf den Server (Calagopus-Panel) |
 | `src/recipe.rs` | Rezepte: Datenformat, Paper-Code und Fabric-JSON |
 | `src/items.rs` | Liste aller Items und Blöcke für die Suche |

@@ -461,6 +461,16 @@ pub struct AppSettings {
     pub servers: Vec<crate::server::ServerConfig>,
     #[serde(default)]
     pub next_server_id: u64,
+    /// Views moved away from their usual side.
+    #[serde(default)]
+    pub docks: Vec<(crate::app::View, crate::app::Dock)>,
+    /// MCP server for AI assistants: on/off, port and secret part of the address.
+    #[serde(default)]
+    pub mcp_enabled: bool,
+    #[serde(default)]
+    pub mcp_port: u16,
+    #[serde(default)]
+    pub mcp_token: String,
 }
 
 fn default_true() -> bool {
@@ -488,6 +498,10 @@ impl Default for AppSettings {
             autosave_on_build: true,
             servers: vec![],
             next_server_id: 1,
+            docks: vec![],
+            mcp_enabled: false,
+            mcp_port: 8765,
+            mcp_token: String::new(),
         }
     }
 }
