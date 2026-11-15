@@ -84,12 +84,77 @@ pub struct ProjectSettings {
     /// Optional resource pack (textures/models) bundled into the plugin/mod.
     #[serde(default)]
     pub pack: PackSettings,
+    /// Id of the server (app settings) the jar is uploaded to after a build (0 = none).
+    #[serde(default)]
+    pub deploy_server: u64,
+    /// Plugin/mod tells OPs in chat which events run (for finding mistakes).
+    #[serde(default)]
+    pub debug: bool,
+}
+
+/// One resource pack .zip of the project. Several packs are merged into one.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PackEntry {
+    /// Path of the .zip, relative to the project file if possible.
+    pub path: String,
+    #[serde(default = "yes")]
+    pub enabled: bool,
+}
+
+/// What happens with one item of the resource pack.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ItemMode {
+    /// Keep the pack as it is: custom models stay custom, vanilla replacements stay replacements.
+    #[default]
+    Auto,
+    /// The vanilla item looks like this everywhere.
+    Replace,
+    /// Only obtainable through blocks / the give command; vanilla items stay untouched.
+    CommandOnly,
+    /// Not exported at all.
+    Off,
+}
+
+impl ItemMode {
+    pub fn label(self) -> (&'static str, &'static str) {
+        match self {
+            ItemMode::Auto => ("Wie im Pack", "As in the pack"),
+            ItemMode::Replace => ("Ersetzt Vanilla-Item", "Replaces vanilla item"),
+            ItemMode::CommandOnly => ("Nur per Befehl / Block", "Command / block only"),
+            ItemMode::Off => ("Aus (nicht einbauen)", "Off (leave out)"),
+        }
+    }
+}
+
+/// Per-item settings of the resource pack, keyed by item model id.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+pub struct ItemRule {
+    #[serde(default)]
+    pub mode: ItemMode,
+    /// Vanilla item that carries / gets replaced by the model, e.g. `minecraft:stick`.
+    #[serde(default)]
+    pub base: String,
+    /// Display name used by the give command (with & color codes).
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub lore: String,
+}
+
+impl ItemRule {
+    pub fn is_default(&self) -> bool {
+        *self == ItemRule::default()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PackSettings {
-    /// Path of the resource pack .zip, relative to the project file if possible.
+    /// Old projects: path of the single resource pack. Moved into `packs` on load.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub path: String,
+    /// Resource packs, highest priority first. They are merged into one pack.
+    #[serde(default)]
+    pub packs: Vec<PackEntry>,
     /// Paper: port of the small web server that hands the pack to players.
     pub port: u16,
     /// Paper: players must accept the pack or get kicked.
@@ -98,33 +163,92 @@ pub struct PackSettings {
     pub send_on_join: bool,
     /// Paper: text shown in the download prompt.
     pub prompt: String,
+    /// Per-item settings (replace vanilla / command only / off).
+    #[serde(default)]
+    pub items: BTreeMap<String, ItemRule>,
+    /// Name of the generated command that hands out the custom items (empty = none).
+    #[serde(default)]
+    pub give_command: String,
 }
 
 impl Default for PackSettings {
     fn default() -> Self {
         Self {
             path: String::new(),
+            packs: vec![],
             port: 8164,
             required: false,
             send_on_join: true,
             prompt: "&aDieser Server nutzt eigene Texturen.".into(),
+            items: BTreeMap::new(),
+            give_command: String::new(),
         }
     }
 }
 
 impl PackSettings {
     pub fn enabled(&self) -> bool {
-        !self.path.trim().is_empty()
+        self.packs
+            .iter()
+            .any(|p| p.enabled && !p.path.trim().is_empty())
     }
-    /// Absolute path, resolving relative paths against the project file's folder.
-    pub fn resolve(&self, project_file: Option<&std::path::Path>) -> std::path::PathBuf {
-        let p = std::path::PathBuf::from(self.path.trim());
+    /// Old single-pack projects -> pack list.
+    pub fn migrate(&mut self) {
+        if !self.path.trim().is_empty() {
+            let path = std::mem::take(&mut self.path);
+            if !self.packs.iter().any(|p| p.path == path) {
+                self.packs.insert(
+                    0,
+                    PackEntry {
+                        path,
+                        enabled: true,
+                    },
+                );
+            }
+        }
+    }
+    pub fn resolve_one(path: &str, project_file: Option<&std::path::Path>) -> std::path::PathBuf {
+        let p = std::path::PathBuf::from(path.trim());
         if p.is_absolute() {
             return p;
         }
         match project_file.and_then(|f| f.parent()) {
             Some(dir) => dir.join(p),
             None => p,
+        }
+    }
+    /// Absolute paths of the enabled packs (highest priority first).
+    pub fn resolve(&self, project_file: Option<&std::path::Path>) -> Vec<std::path::PathBuf> {
+        self.packs
+            .iter()
+            .filter(|p| p.enabled && !p.path.trim().is_empty())
+            .map(|p| Self::resolve_one(&p.path, project_file))
+            .collect()
+    }
+    pub fn rule(&self, id: &str) -> ItemRule {
+        self.items.get(id).cloned().unwrap_or_default()
+    }
+    pub fn set_rule(&mut self, id: &str, rule: ItemRule) {
+        if rule.is_default() {
+            self.items.remove(id);
+        } else {
+            self.items.insert(id.to_string(), rule);
+        }
+    }
+    /// Cleaned name of the give command, if enabled.
+    pub fn give_cmd(&self) -> Option<String> {
+        let c: String = self
+            .give_command
+            .trim()
+            .trim_start_matches('/')
+            .to_lowercase()
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+            .collect();
+        if c.is_empty() || !self.enabled() {
+            None
+        } else {
+            Some(c)
         }
     }
 }
@@ -143,6 +267,8 @@ impl Default for ProjectSettings {
             deploy_dir: String::new(),
             deploy_clean: false,
             pack: PackSettings::default(),
+            deploy_server: 0,
+            debug: false,
         }
     }
 }
@@ -447,6 +573,7 @@ impl Project {
             .next_id
             .max(p.commands.iter().map(|c| c.id + 1).max().unwrap_or(0));
         p.migrate_commands();
+        p.settings.pack.migrate();
         Ok(p)
     }
 

@@ -7,8 +7,13 @@ mod build;
 mod codegen;
 mod examples;
 mod i18n;
+mod item_render;
+mod items;
+mod mcp;
 mod model;
+mod recipe;
 mod resourcepack;
+mod server;
 mod theme;
 mod tools;
 mod ui;
@@ -29,8 +34,80 @@ fn main() -> eframe::Result<()> {
         s.save();
         std::process::exit(0);
     }
+    // Started by AI programs (Claude, Cursor, VS Code …): MCP over stdin/stdout.
+    if args.get(1).map(|a| a == "--mcp-stdio").unwrap_or(false) {
+        std::process::exit(mcp::stdio_bridge());
+    }
     if args.get(1).map(|a| a == "--setup-tools").unwrap_or(false) {
         std::process::exit(tools::setup_cli());
+    }
+    // minecraft-builder --render-item <pack.zip> <out-dir> <id>...: item pictures as PNG (for tests).
+    if args.len() >= 5 && args[1] == "--render-item" {
+        let mut r = item_render::Renderer::new(&[PathBuf::from(&args[2])]);
+        let dir = PathBuf::from(&args[3]);
+        let _ = std::fs::create_dir_all(&dir);
+        for id in &args[4..] {
+            match r.render(id) {
+                Some(img) => {
+                    let raw: Vec<u8> = img
+                        .pixels
+                        .iter()
+                        .flat_map(|c| c.to_srgba_unmultiplied())
+                        .collect();
+                    let out =
+                        image::RgbaImage::from_raw(img.size[0] as u32, img.size[1] as u32, raw)
+                            .unwrap();
+                    let name = id.replace(':', "_");
+                    let _ = out.save(dir.join(format!("{name}.png")));
+                }
+                None => eprintln!("{id}: nothing to draw"),
+            }
+        }
+        std::process::exit(0);
+    }
+    // minecraft-builder --starter <index> <paper|fabric> <out.mcb>: writes a template project (for tests).
+    if args.len() >= 5 && args[1] == "--starter" {
+        let platform = if args[3] == "fabric" {
+            model::Platform::Fabric
+        } else {
+            model::Platform::Paper
+        };
+        let all = examples::Starter::for_platform(platform);
+        let starter = args[2]
+            .parse::<usize>()
+            .ok()
+            .and_then(|i| all.get(i).copied())
+            .unwrap_or(examples::Starter::Welcome);
+        let p = examples::new_project("Vorlage", platform, starter);
+        match p.save(std::path::Path::new(&args[4])) {
+            Ok(()) => std::process::exit(0),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2);
+            }
+        }
+    }
+    // minecraft-builder --update-helper <installer> <app exe> <relaunch>: installs an update (see update.rs).
+    if args.len() >= 5 && args[1] == "--update-helper" {
+        std::process::exit(update::helper_main(
+            std::path::Path::new(&args[2]),
+            std::path::Path::new(&args[3]),
+            args[4] == "1",
+        ));
+    }
+    // minecraft-builder --selftest-project <paper|fabric> <file.mcb>: the self-test project as file (for tests).
+    if args.len() >= 4 && args[1] == "--selftest-project" {
+        let platform = if args[2] == "fabric" {
+            model::Platform::Fabric
+        } else {
+            model::Platform::Paper
+        };
+        let p = examples::all_blocks_project(platform);
+        std::process::exit(if p.save(std::path::Path::new(&args[3])).is_ok() {
+            0
+        } else {
+            2
+        });
     }
     if args.len() >= 4 && (args[1] == "--export" || args[1] == "--selftest") {
         let project = if args[1] == "--export" {

@@ -1907,8 +1907,9 @@ dependencies = [
 
 [[package]]
 name = "minecraft-builder"
-version = "0.3.1"
+version = "0.8.3"
 dependencies = [
+ "arboard",
  "chrono",
  "eframe",
  "egui",

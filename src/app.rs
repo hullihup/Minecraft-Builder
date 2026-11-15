@@ -11,14 +11,90 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Activity {
+/// A panel of the editor. Every view can be docked left, right or at the bottom.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
+pub enum View {
     Workspaces,
     Blocks,
     Resources,
     Config,
     Project,
     Build,
+    Plugins,
+    Inspector,
+    Code,
+    Console,
+    Problems,
+    Server,
+}
+
+/// Where a view is docked.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
+pub enum Dock {
+    Left,
+    Right,
+    Bottom,
+}
+
+pub type Activity = View;
+pub type RightTab = View;
+pub type BottomTab = View;
+
+impl View {
+    pub const ALL: [View; 12] = [
+        View::Workspaces,
+        View::Blocks,
+        View::Resources,
+        View::Config,
+        View::Project,
+        View::Build,
+        View::Plugins,
+        View::Inspector,
+        View::Code,
+        View::Console,
+        View::Problems,
+        View::Server,
+    ];
+    pub fn default_dock(self) -> Dock {
+        match self {
+            View::Inspector | View::Code => Dock::Right,
+            View::Console | View::Problems | View::Server => Dock::Bottom,
+            _ => Dock::Left,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            View::Workspaces => t("Arbeitsbereiche & Befehle", "Workspaces & commands"),
+            View::Blocks => t("Block-Bibliothek", "Block library"),
+            View::Resources => t("Texturen & Modelle", "Textures & models"),
+            View::Config => t("Einstellungen (config.yml)", "Settings (config.yml)"),
+            View::Project => t("Projekt & Versionen", "Project & versions"),
+            View::Build => t("Bauen & Export", "Build & export"),
+            View::Plugins => t("Plugins (MCP)", "Plugins (MCP)"),
+            View::Inspector => t("Inspector", "Inspector"),
+            View::Code => t("Java-Code", "Java code"),
+            View::Console => t("Konsole", "Console"),
+            View::Problems => t("Probleme", "Problems"),
+            View::Server => t("Server-Konsole", "Server console"),
+        }
+    }
+    pub fn icon(self) -> crate::ui::icons::Icon {
+        use crate::ui::icons::Icon as I;
+        match self {
+            View::Workspaces => I::Layers,
+            View::Blocks => I::Puzzle,
+            View::Resources => I::Image,
+            View::Config => I::Note,
+            View::Project => I::Sliders,
+            View::Build => I::Package,
+            View::Plugins => I::Sparkle,
+            View::Inspector => I::Gear,
+            View::Code => I::Code,
+            View::Console => I::Keyboard,
+            View::Problems => I::Warning,
+            View::Server => I::Server,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -39,12 +115,33 @@ pub struct SetupState {
 /// Cached information about the project's resource pack.
 #[derive(Default)]
 pub struct PackCache {
-    pub path: PathBuf,
+    /// What the info was computed for: pack paths, item rules, namespace.
+    pub key: Option<(
+        Vec<PathBuf>,
+        std::collections::BTreeMap<String, crate::model::ItemRule>,
+        String,
+    )>,
     pub info: Option<Result<crate::resourcepack::PackInfo, String>>,
     pub thumbs: HashMap<String, Option<egui::TextureHandle>>,
 }
 
-/// Short info about a project file for the start screen.
+/// Item pictures (menu editor, item search, block previews), drawn by `item_render`.
+#[derive(Default)]
+pub struct VanillaCache {
+    /// Files the renderer was made for: project packs, then the vanilla source.
+    pub key: Option<Vec<PathBuf>>,
+    pub renderer: Option<crate::item_render::Renderer>,
+    /// The vanilla source in use (template pack or Minecraft .jar), if any.
+    pub vanilla: Option<PathBuf>,
+    pub thumbs: HashMap<String, Option<egui::TextureHandle>>,
+    /// Items of the texture source that the built-in item list does not know: (id, is block).
+    pub extra_items: Vec<(String, bool)>,
+    /// Pictures made in the current frame (kept small so the UI stays smooth).
+    pub loaded_this_frame: usize,
+    /// The packs were already checked in this frame.
+    pub checked_this_frame: bool,
+}
+
 #[derive(Clone)]
 pub struct ProjectSummary {
     pub name: String,
@@ -55,16 +152,17 @@ pub struct ProjectSummary {
     pub modified: std::time::SystemTime,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum RightTab {
-    Inspector,
-    Code,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum BottomTab {
-    Console,
-    Problems,
+/// Console of the project's game server, shown in the bottom panel.
+#[derive(Default)]
+pub struct ServerConsole {
+    pub text: String,
+    pub error: Option<String>,
+    pub rx: Option<Receiver<Result<String, String>>>,
+    pub last_poll: f64,
+    pub input: String,
+    /// Result of the last command / power action.
+    pub action_rx: Option<Receiver<Result<String, String>>>,
+    pub status: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -84,12 +182,12 @@ pub struct LogLine {
 
 /// Pan/zoom of one workspace.
 #[derive(Clone, Copy)]
-pub struct View {
+pub struct Viewport {
     pub pan: egui::Vec2,
     pub zoom: f32,
 }
 
-impl Default for View {
+impl Default for Viewport {
     fn default() -> Self {
         Self {
             pan: egui::vec2(40.0, 40.0),
@@ -128,6 +226,12 @@ pub enum Dialog {
         text: String,
     },
     Updates,
+    Settings,
+    /// Search & replace in all texts of the project.
+    Replace {
+        find: String,
+        with: String,
+    },
 }
 
 /// State of the updater.
@@ -173,7 +277,7 @@ pub struct App {
     redo: Vec<Project>,
     committed: Project,
     pub active_ws: usize,
-    pub views: HashMap<usize, View>,
+    pub views: HashMap<usize, Viewport>,
     pub selection: BTreeSet<NodeId>,
     pub selected_note: Option<NodeId>,
     pub activity: Activity,
@@ -187,7 +291,11 @@ pub struct App {
     pub console_search: String,
     pub problems: Vec<Problem>,
     pub code_preview: String,
+    /// Highlighted code preview, laid out once: (code, pixels per point, text).
+    pub code_galley: Option<(String, f32, std::sync::Arc<egui::Galley>)>,
     gen_for: Option<Project>,
+    /// Code generation running in the background: (project it is for, result).
+    gen_job: Option<std::sync::mpsc::Receiver<(Project, codegen::Output)>>,
     pub palette: Option<Palette>,
     pub dialog: Dialog,
     pub job: Option<Job>,
@@ -219,6 +327,26 @@ pub struct App {
     pub summaries: HashMap<PathBuf, (std::time::SystemTime, Option<ProjectSummary>)>,
     /// Screen rects of UI parts, for the tutorial highlights.
     pub ui_rects: HashMap<&'static str, egui::Rect>,
+    pub vanilla: VanillaCache,
+    pub settings_tab: crate::ui::settings::Tab,
+    pub server_ui: crate::ui::settings::ServerUi,
+    pub menu_edit: Option<crate::ui::menu_editor::MenuEdit>,
+    /// Recipe block being edited: (workspace, node).
+    pub recipe_edit: Option<(usize, NodeId)>,
+    /// "Reason (screen)" block being edited: (workspace, node).
+    pub screen_edit: Option<(usize, NodeId)>,
+    pub server_console: ServerConsole,
+    /// Running MCP server (Plugins panel).
+    pub mcp: Option<crate::mcp::Server>,
+    pub mcp_error: Option<String>,
+    pub mcp_log: Vec<String>,
+    /// Result of the last "Add" / "Remove" in the Plugins panel: (ok, text).
+    pub mcp_note: Option<(bool, String)>,
+    /// State of the AI programs, checked every few seconds: (time, states).
+    pub mcp_clients: Option<(f64, Vec<(crate::mcp::Client, crate::mcp::ClientState)>)>,
+    /// Test mode run, if shown.
+    pub trace: Option<crate::ui::trace::Trace>,
+    pub item_picker: Option<crate::ui::menu_editor::ItemPicker>,
     allow_close: bool,
     title: String,
 }
@@ -254,7 +382,9 @@ impl App {
             console_search: String::new(),
             problems: vec![],
             code_preview: String::new(),
+            code_galley: None,
             gen_for: None,
+            gen_job: None,
             palette: None,
             dialog: Dialog::None,
             job: None,
@@ -281,6 +411,20 @@ impl App {
             home_search: String::new(),
             summaries: HashMap::new(),
             ui_rects: HashMap::new(),
+            vanilla: VanillaCache::default(),
+            settings_tab: crate::ui::settings::Tab::General,
+            server_ui: Default::default(),
+            menu_edit: None,
+            recipe_edit: None,
+            trace: None,
+            server_console: ServerConsole::default(),
+            mcp: None,
+            mcp_error: None,
+            mcp_log: vec![],
+            mcp_note: None,
+            mcp_clients: None,
+            screen_edit: None,
+            item_picker: None,
             allow_close: false,
             title: String::new(),
         };
@@ -293,6 +437,25 @@ impl App {
             ),
         );
         app.canvas.fit_request = true;
+        // The last update could not be installed: say so instead of silently staying old.
+        if let Ok(why) = std::fs::read_to_string(crate::update::failure_file()) {
+            let _ = std::fs::remove_file(crate::update::failure_file());
+            app.log(
+                Level::Error,
+                format!("Update fehlgeschlagen: {}", why.trim()),
+            );
+            app.dialog = Dialog::Message {
+                title: t("Update nicht installiert", "Update not installed").into(),
+                text: format!(
+                    "{}\n\n{}",
+                    t(
+                        "Das letzte Update konnte nicht installiert werden. Du kannst es unter Hilfe → Nach Updates suchen erneut versuchen oder den Installer von GitHub herunterladen und starten.",
+                        "The last update could not be installed. Try again under Help → Check for updates, or download and run the installer from GitHub.",
+                    ),
+                    why.trim()
+                ),
+            };
+        }
         if !app.settings.onboarded {
             app.onboarding = Some(0);
         }
@@ -328,7 +491,7 @@ impl App {
         let i = self.active_ws.min(self.project.workspaces.len() - 1);
         &mut self.project.workspaces[i]
     }
-    pub fn view(&mut self) -> &mut View {
+    pub fn view(&mut self) -> &mut Viewport {
         self.views.entry(self.active_ws).or_default()
     }
 
@@ -348,11 +511,15 @@ impl App {
         self.selection.clear();
         self.selected_note = None;
         self.gen_for = None;
+        self.gen_job = None;
         self.palette = None;
         self.canvas.fit_request = true;
         self.screen = Screen::Editor;
         self.cmd_draft = None;
         self.show_commands = false;
+        self.menu_edit = None;
+        self.recipe_edit = None;
+        self.item_picker = None;
         self.refresh_pack(true);
     }
 
@@ -368,36 +535,52 @@ impl App {
         self.summaries.clear();
     }
 
-    /// Reloads the resource pack info if the path changed (or `force`).
+    /// Reloads the resource pack info if the packs or item rules changed (or `force`).
     pub fn refresh_pack(&mut self, force: bool) {
         let s = &self.project.settings.pack;
         if !s.enabled() {
             if self.pack.info.is_some() || force {
                 self.pack = PackCache::default();
                 crate::resourcepack::set_known_models(vec![]);
+                crate::resourcepack::set_known_sounds(vec![]);
             }
             return;
         }
-        let path = s.resolve(self.path.as_deref());
-        if !force && path == self.pack.path && self.pack.info.is_some() {
+        let ns = crate::resourcepack::namespace_for(&self.project.settings.id);
+        let key = (s.resolve(self.path.as_deref()), s.items.clone(), ns);
+        if !force && self.pack.key.as_ref() == Some(&key) && self.pack.info.is_some() {
             return;
         }
-        let info = crate::resourcepack::inspect(&path);
+        let info = crate::resourcepack::inspect(&key.0, &key.1, &key.2);
         crate::resourcepack::set_known_models(
             info.as_ref()
                 .map(|i| i.item_models.clone())
                 .unwrap_or_default(),
         );
+        crate::resourcepack::set_known_sounds(
+            info.as_ref().map(|i| i.sounds.clone()).unwrap_or_default(),
+        );
+        // Thumbnails stay valid as long as the pack files are the same.
+        let same_files = self.pack.key.as_ref().map(|k| &k.0) == Some(&key.0) && !force;
+        let thumbs = if same_files {
+            std::mem::take(&mut self.pack.thumbs)
+        } else {
+            HashMap::new()
+        };
         self.pack = PackCache {
-            path,
+            key: Some(key),
             info: Some(info),
-            thumbs: HashMap::new(),
+            thumbs,
         };
     }
 
     /// Adds a resource pack .zip to the project (copied next to the project file).
     pub fn add_pack(&mut self, src: PathBuf) {
-        match crate::resourcepack::inspect(&src) {
+        match crate::resourcepack::inspect(
+            std::slice::from_ref(&src),
+            &Default::default(),
+            "custom",
+        ) {
             Err(e) => {
                 self.dialog = Dialog::Message {
                     title: t("Resourcepack", "Resource pack").into(),
@@ -407,32 +590,207 @@ impl App {
             Ok(info) => {
                 let mut stored = src.display().to_string();
                 if let Some(dir) = self.path.as_ref().and_then(|p| p.parent()) {
-                    let name = format!("{}-resourcepack.zip", self.project.settings.id);
-                    let target = dir.join(&name);
+                    let file = src
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "pack.zip".into());
+                    let rel = format!("resourcepacks/{file}");
+                    let target = dir.join(&rel);
                     if target != src {
-                        match std::fs::copy(&src, &target) {
-                            Ok(_) => stored = name,
+                        match std::fs::create_dir_all(dir.join("resourcepacks"))
+                            .and_then(|_| std::fs::copy(&src, &target))
+                        {
+                            Ok(_) => stored = rel,
                             Err(e) => self.log(
                                 Level::Warn,
                                 format!("Konnte das Pack nicht in den Projektordner kopieren: {e}"),
                             ),
                         }
                     } else {
-                        stored = name;
+                        stored = rel;
                     }
                 }
-                self.project.settings.pack.path = stored;
+                let packs = &mut self.project.settings.pack.packs;
+                if let Some(p) = packs.iter_mut().find(|p| p.path == stored) {
+                    p.enabled = true;
+                } else {
+                    packs.push(crate::model::PackEntry {
+                        path: stored,
+                        enabled: true,
+                    });
+                }
+                let count = packs.len();
                 self.log(
                     Level::Done,
                     format!(
-                        "Resourcepack hinzugefügt: {} Modelle, {} Texturen",
+                        "Resourcepack hinzugefügt: {} Modelle, {} Texturen{}",
                         info.item_models.len(),
-                        info.textures.len()
+                        info.textures.len(),
+                        if count > 1 {
+                            format!(" – {count} Packs werden zu einem zusammengeführt")
+                        } else {
+                            String::new()
+                        }
                     ),
                 );
                 self.refresh_pack(true);
             }
         }
+    }
+
+    /// Thumbnail of a texture inside the project's packs.
+    pub fn pack_thumb(&mut self, ctx: &egui::Context, entry: &str) -> Option<egui::TextureId> {
+        if let Some(h) = self.pack.thumbs.get(entry) {
+            return h.as_ref().map(|h| h.id());
+        }
+        if self.vanilla.loaded_this_frame >= 6 {
+            ctx.request_repaint();
+            return None;
+        }
+        self.vanilla.loaded_this_frame += 1;
+        let handle = match &self.pack.info {
+            Some(Ok(info)) => info
+                .source
+                .get(entry)
+                .and_then(|i| info.packs.get(*i))
+                .and_then(|p| crate::resourcepack::texture_preview(&p.path, entry))
+                .map(|img| {
+                    ctx.load_texture(format!("pack:{entry}"), img, egui::TextureOptions::NEAREST)
+                }),
+            _ => None,
+        };
+        let id = handle.as_ref().map(|h| h.id());
+        self.pack.thumbs.insert(entry.to_string(), handle);
+        id
+    }
+
+    /// Makes sure the item renderer reads the current packs and vanilla source.
+    pub fn ensure_renderer(&mut self) {
+        if self.vanilla.checked_this_frame && self.vanilla.key.is_some() {
+            return;
+        }
+        self.vanilla.checked_this_frame = true;
+        let vanilla = if self.settings.vanilla_textures {
+            self.settings.vanilla_source()
+        } else {
+            None
+        };
+        let mut key = self.project.settings.pack.resolve(self.path.as_deref());
+        key.extend(vanilla.clone());
+        if self.vanilla.key.as_ref() != Some(&key) {
+            let r = crate::item_render::Renderer::new(&key);
+            self.vanilla.extra_items = r
+                .vanilla_items()
+                .into_iter()
+                .filter(|(id, _)| crate::items::get(id).is_none())
+                .collect();
+            self.vanilla.renderer = Some(r);
+            self.vanilla.key = Some(key);
+            self.vanilla.vanilla = vanilla;
+            self.vanilla.thumbs.clear();
+        }
+    }
+
+    /// Forgets all item pictures (after the texture settings changed).
+    pub fn reset_item_pictures(&mut self) {
+        self.vanilla.key = None;
+        self.vanilla.renderer = None;
+        self.vanilla.thumbs.clear();
+    }
+
+    /// Picture of an item like in the inventory: blocks as 3D cubes, items flat.
+    /// A custom model (resource pack) is used if given.
+    pub fn item_texture(
+        &mut self,
+        ctx: &egui::Context,
+        item: &str,
+        model: &str,
+    ) -> Option<egui::TextureId> {
+        let item = item.trim();
+        let model = model.trim();
+        let key = if model.is_empty() {
+            item.to_string()
+        } else {
+            format!("{item}|{model}")
+        };
+        if key.is_empty() {
+            return None;
+        }
+        self.ensure_renderer();
+        if let Some(h) = self.vanilla.thumbs.get(&key) {
+            return h.as_ref().map(|h| h.id());
+        }
+        if self.vanilla.loaded_this_frame >= 16 {
+            ctx.request_repaint();
+            return None;
+        }
+        self.vanilla.loaded_this_frame += 1;
+        let r = self.vanilla.renderer.as_mut()?;
+        let img = (!model.is_empty())
+            .then(|| r.render(model))
+            .flatten()
+            .or_else(|| r.render(item));
+        let handle = img
+            .map(|img| ctx.load_texture(format!("item:{key}"), img, egui::TextureOptions::NEAREST));
+        let id = handle.as_ref().map(|h| h.id());
+        self.vanilla.thumbs.insert(key, handle);
+        id
+    }
+
+    /// Lets the user pick the vanilla textures (template pack .zip or Minecraft .jar).
+    /// A .zip is copied into the app's settings folder so it stays available.
+    pub fn pick_texture_source(&mut self) {
+        let Some(src) = rfd::FileDialog::new()
+            .add_filter(
+                t("Texturen-Pack oder Minecraft", "Texture pack or Minecraft"),
+                &["zip", "jar"],
+            )
+            .set_title(t("Minecraft-Texturen wählen", "Pick Minecraft textures"))
+            .pick_file()
+        else {
+            return;
+        };
+        self.set_texture_source(src);
+    }
+
+    pub fn set_texture_source(&mut self, src: PathBuf) {
+        if !crate::item_render::is_vanilla_source(&src) {
+            self.dialog = Dialog::Message {
+                title: t("Keine Minecraft-Texturen", "No Minecraft textures").into(),
+                text: t(
+                    "In dieser Datei fehlen die Block-Modelle und Texturen von Minecraft (assets/minecraft/models/block, textures/block). Nimm ein vollständiges Vanilla-Template-Pack für deine Minecraft-Version oder die Minecraft-.jar aus .minecraft/versions.",
+                    "This file lacks Minecraft's block models and textures (assets/minecraft/models/block, textures/block). Use a complete vanilla template pack for your Minecraft version or the Minecraft .jar from .minecraft/versions.",
+                )
+                .into(),
+            };
+            return;
+        }
+        let mut stored = src.clone();
+        if src
+            .extension()
+            .map(|e| e.eq_ignore_ascii_case("zip"))
+            .unwrap_or(false)
+        {
+            let dir = build::config_dir().join("textures");
+            let target = dir.join(src.file_name().unwrap_or_default());
+            if target != src {
+                match std::fs::create_dir_all(&dir).and_then(|_| std::fs::copy(&src, &target)) {
+                    Ok(_) => stored = target,
+                    Err(e) => self.log(
+                        Level::Warn,
+                        format!("Konnte das Texturen-Pack nicht kopieren, es wird vom alten Ort gelesen: {e}"),
+                    ),
+                }
+            }
+        }
+        self.settings.texture_source = stored.display().to_string();
+        self.settings.vanilla_textures = true;
+        self.settings.save();
+        self.reset_item_pictures();
+        self.log(
+            Level::Done,
+            format!("Minecraft-Texturen: {}", stored.display()),
+        );
     }
 
     /// Loads the project summaries for the start screen.
@@ -851,6 +1209,196 @@ impl App {
         id
     }
 
+    /// Exec outputs in the current workspace that nothing is connected to yet:
+    /// (node, pin, label). Events and blocks with "next" first.
+    pub fn free_flow_outputs(&self) -> Vec<(NodeId, String, String)> {
+        let ws = self.ws();
+        let mut out = vec![];
+        for n in &ws.nodes {
+            let Some(shape) = crate::blocks::shape(n, &self.project) else {
+                continue;
+            };
+            for o in shape
+                .outputs
+                .iter()
+                .filter(|o| o.ty == crate::blocks::PinType::Exec)
+            {
+                if ws.links_from(n.id, &o.id).next().is_some() {
+                    continue;
+                }
+                let mut label = match self.project.node_command(n) {
+                    Some(c) => format!("{} /{}", t("Befehl", "Command"), c.name),
+                    None => crate::i18n::tl(shape.def.name).to_string(),
+                };
+                if o.id != "next" {
+                    label = format!("{label} → {}", o.label.text());
+                }
+                out.push((n.id, o.id.to_string(), format!("{label}  #{}", n.id)));
+            }
+        }
+        out
+    }
+
+    /// Adds a block and, if it has a flow input, connects it to the block that was
+    /// selected before (or the nearest free flow output on its left).
+    pub fn add_node_auto(&mut self, kind: &str, pos: egui::Pos2) -> NodeId {
+        let before: Option<NodeId> = if self.selection.len() == 1 {
+            self.selection.iter().next().copied()
+        } else {
+            None
+        };
+        let id = self.add_node(kind, pos);
+        let Some(def) = crate::blocks::get(kind) else {
+            return id;
+        };
+        if !def.has_exec_in() {
+            return id;
+        }
+        let free = self.free_flow_outputs();
+        let new_pos = self.ws().node(id).map(|n| n.pos).unwrap_or([pos.x, pos.y]);
+        let pick = before
+            .and_then(|b| free.iter().find(|(n, _, _)| *n == b && *n != id))
+            .or_else(|| {
+                // Nearest free output to the left, roughly on the same height.
+                free.iter()
+                    .filter(|(n, _, _)| *n != id)
+                    .filter_map(|f| {
+                        let p = self.ws().node(f.0)?.pos;
+                        let (dx, dy) = (new_pos[0] - p[0], (new_pos[1] - p[1]).abs());
+                        (dx > 40.0 && dx < 900.0 && dy < 260.0).then_some((dx + dy * 2.0, f))
+                    })
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                    .map(|x| x.1)
+            })
+            .cloned();
+        if let Some((from, pin, label)) = pick {
+            ui::canvas::connect(
+                self.ws_mut(),
+                crate::model::PinRef { node: from, pin },
+                crate::model::PinRef {
+                    node: id,
+                    pin: "in".into(),
+                },
+                true,
+            );
+            self.log(
+                Level::Info,
+                format!(
+                    "Automatisch verbunden: {label} → {}",
+                    crate::i18n::tl(def.name)
+                ),
+            );
+        }
+        id
+    }
+
+    /// Texts of all blocks that contain `find`: count of occurrences.
+    pub fn count_text(&self, find: &str) -> usize {
+        if find.is_empty() {
+            return 0;
+        }
+        self.project
+            .workspaces
+            .iter()
+            .flat_map(|w| w.nodes.iter())
+            .flat_map(|n| n.values.iter())
+            .filter(|(k, _)| *k != "cmd")
+            .map(|(_, v)| v.matches(find).count())
+            .sum::<usize>()
+            + self
+                .project
+                .workspaces
+                .iter()
+                .flat_map(|w| w.notes.iter())
+                .map(|n| n.title.matches(find).count() + n.text.matches(find).count())
+                .sum::<usize>()
+    }
+
+    /// Replaces `find` in all block values and notes. Returns how many were replaced.
+    pub fn replace_text(&mut self, find: &str, with: &str) -> usize {
+        let n = self.count_text(find);
+        if n == 0 {
+            return 0;
+        }
+        for w in &mut self.project.workspaces {
+            for node in &mut w.nodes {
+                for (k, v) in node.values.iter_mut() {
+                    if k != "cmd" {
+                        *v = v.replace(find, with);
+                    }
+                }
+            }
+            for note in &mut w.notes {
+                note.title = note.title.replace(find, with);
+                note.text = note.text.replace(find, with);
+            }
+        }
+        self.log(Level::Done, format!("{n}× „{find}“ durch „{with}“ ersetzt"));
+        n
+    }
+
+    // ---------------------------------------------------------------- docks
+
+    pub fn dock_of(&self, v: View) -> Dock {
+        self.settings
+            .docks
+            .iter()
+            .find(|(x, _)| *x == v)
+            .map(|(_, d)| *d)
+            .unwrap_or(v.default_dock())
+    }
+
+    /// Views docked at one side, in their fixed order.
+    pub fn views_in(&self, d: Dock) -> Vec<View> {
+        View::ALL
+            .into_iter()
+            .filter(|v| self.dock_of(*v) == d)
+            .collect()
+    }
+
+    /// The view shown in a dock (the remembered one if it is still docked there).
+    pub fn active_in(&self, d: Dock) -> Option<View> {
+        let cur = match d {
+            Dock::Left => self.activity,
+            Dock::Right => self.right_tab,
+            Dock::Bottom => self.bottom_tab,
+        };
+        let views = self.views_in(d);
+        if views.contains(&cur) {
+            Some(cur)
+        } else {
+            views.first().copied()
+        }
+    }
+
+    /// Brings a view to the front, wherever it is docked.
+    pub fn show_view(&mut self, v: View) {
+        match self.dock_of(v) {
+            Dock::Left => {
+                self.activity = v;
+                self.show_sidebar = true;
+            }
+            Dock::Right => {
+                self.right_tab = v;
+                self.show_right = true;
+            }
+            Dock::Bottom => {
+                self.bottom_tab = v;
+                self.show_bottom = true;
+            }
+        }
+    }
+
+    /// Moves a view to another side and shows it there.
+    pub fn move_view(&mut self, v: View, d: Dock) {
+        self.settings.docks.retain(|(x, _)| *x != v);
+        if d != v.default_dock() {
+            self.settings.docks.push((v, d));
+        }
+        self.settings.save();
+        self.show_view(v);
+    }
+
     pub fn delete_selection(&mut self) {
         let sel: Vec<NodeId> = self.selection.iter().copied().collect();
         for id in sel {
@@ -997,7 +1545,12 @@ impl App {
             return;
         }
         if self.path.is_none() || self.dirty() {
-            if !self.save(false) {
+            if self.path.is_some() && !self.settings.autosave_on_build {
+                // Ask where to save instead of overwriting silently.
+                if !self.save(true) {
+                    return;
+                }
+            } else if !self.save(false) {
                 return;
             }
         }
@@ -1005,8 +1558,7 @@ impl App {
         let out = codegen::generate(&self.project);
         if out.has_errors() {
             self.problems = out.problems;
-            self.show_bottom = true;
-            self.bottom_tab = BottomTab::Problems;
+            self.show_view(View::Problems);
             self.log(
                 Level::Error,
                 t(
@@ -1017,8 +1569,7 @@ impl App {
             return;
         }
         let dir = build::export_dir(&path, &self.project);
-        self.show_bottom = true;
-        self.bottom_tab = BottomTab::Console;
+        self.show_view(View::Console);
         self.log(
             Level::Info,
             if export_only {
@@ -1028,11 +1579,19 @@ impl App {
             },
         );
         self.job_export_only = export_only;
+        let server = if export_only {
+            None
+        } else {
+            self.settings
+                .server(self.project.settings.deploy_server)
+                .cloned()
+        };
         self.job = Some(build::start(
             self.project.clone(),
             self.path.clone(),
             dir,
             !export_only,
+            server,
             ctx.clone(),
         ));
     }
@@ -1108,14 +1667,37 @@ impl App {
     }
 
     /// Re-runs the code generator when the project changed (for problems + preview).
-    fn refresh_generated(&mut self) {
+    /// Problems and the code preview are made in the background, so typing and
+    /// dragging never wait for the code generator.
+    fn refresh_generated(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = &self.gen_job {
+            match rx.try_recv() {
+                Ok((p, out)) => {
+                    self.problems = out.problems;
+                    self.code_preview = out.main_java;
+                    self.gen_for = Some(p);
+                    self.gen_job = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                Err(_) => self.gen_job = None,
+            }
+        }
         if self.gen_for.as_ref() == Some(&self.project) {
             return;
         }
-        let out = codegen::generate(&self.project);
-        self.problems = out.problems;
-        self.code_preview = out.main_java;
-        self.gen_for = Some(self.project.clone());
+        // While a block is dragged its position changes every frame: wait for the drop.
+        if self.gen_for.is_some() && ctx.input(|i| i.pointer.any_down()) {
+            return;
+        }
+        let p = self.project.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let out = codegen::generate(&p);
+            let _ = tx.send((p, out));
+            ctx.request_repaint();
+        });
+        self.gen_job = Some(rx);
     }
 
     // ------------------------------------------------------------ shortcuts
@@ -1227,7 +1809,11 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.vanilla.loaded_this_frame = 0;
+        self.vanilla.checked_this_frame = false;
         self.poll_jobs();
+        ui::settings::poll(self, &ctx);
+        ui::plugins::poll(self, &ctx);
         self.poll_setup();
         self.poll_update(&ctx);
         if self.update.checking || self.update.downloading {
@@ -1252,9 +1838,22 @@ impl eframe::App for App {
             return;
         }
 
+        let prof = std::env::var_os("MCB_PROFILE").is_some();
+        let mut tk = std::time::Instant::now();
+        let mut lap = |name: &'static str| {
+            if prof {
+                let e = tk.elapsed().as_secs_f64() * 1000.0;
+                PROF.with(|p| p.borrow_mut().add(name, e));
+                tk = std::time::Instant::now();
+            }
+        };
         self.shortcuts(&ctx);
-        self.refresh_generated();
+        ui::menu_editor::publish_ids(&self.project);
+        lap("publish_ids");
+        self.refresh_generated(&ctx);
+        lap("codegen");
         self.refresh_pack(false);
+        lap("pack");
         crate::ui::widgets::set_config_keys(
             self.project.config.iter().map(|c| c.key.clone()).collect(),
         );
@@ -1262,29 +1861,50 @@ impl eframe::App for App {
         ui::panels::top_bar(self, ui);
         ui::panels::status_bar(self, ui);
         ui::panels::activity_bar(self, ui);
+        lap("bars");
         if self.show_sidebar {
             ui::panels::sidebar(self, ui);
         }
+        lap("sidebar");
         if self.show_right {
             ui::panels::right_panel(self, ui);
         }
+        lap("right");
         if self.show_bottom {
             ui::panels::bottom_panel(self, ui);
         }
+        lap("bottom");
         egui::CentralPanel::no_frame().show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             ui::panels::tabs(self, ui);
             ui::canvas::show(self, ui);
         });
+        lap("canvas");
+        ui::panels::drop_zones(self, &ctx);
         ui::dialogs::show(self, &ctx);
         if self.show_commands {
             ui::commands::show(self, &ctx);
         }
+        ui::menu_editor::show(self, &ctx);
+        ui::recipe_editor::show(self, &ctx);
+        ui::screen_editor::show(self, &ctx);
+        ui::trace::window(self, &ctx);
+        ui::menu_editor::item_picker(self, &ctx);
         ui::onboarding::show(self, &ctx);
         ui::onboarding::tutorial(self, &ctx);
-
+        lap("windows");
         self.commit_undo(&ctx);
         self.update_title(&ctx);
+        lap("undo+title");
+        if prof {
+            if let Some(cpu) = _frame.info().cpu_usage {
+                PROF.with(|p| {
+                    p.borrow_mut()
+                        .add("CPU incl. tessellation (prev)", cpu as f64 * 1000.0)
+                });
+            }
+            PROF.with(|p| p.borrow_mut().frame());
+        }
         let setup_running = self
             .setup
             .as_ref()
@@ -1309,6 +1929,49 @@ impl Drop for App {
             if self.settings.auto_update {
                 let _ = crate::update::run_installer(&p, false);
             }
+        }
+    }
+}
+
+thread_local! {
+    static PROF: std::cell::RefCell<Prof> = std::cell::RefCell::new(Prof::default());
+}
+
+/// Frame timing per part of the UI (MCB_PROFILE=1), printed every 120 frames.
+#[derive(Default)]
+struct Prof {
+    sums: Vec<(&'static str, f64, f64)>,
+    frames: u32,
+}
+
+impl Prof {
+    fn add(&mut self, name: &'static str, ms: f64) {
+        match self.sums.iter_mut().find(|s| s.0 == name) {
+            Some(s) => {
+                s.1 += ms;
+                s.2 = s.2.max(ms);
+            }
+            None => self.sums.push((name, ms, ms)),
+        }
+    }
+    fn frame(&mut self) {
+        self.frames += 1;
+        if self.frames >= 120 {
+            let total: f64 = self
+                .sums
+                .iter()
+                .filter(|s| !s.0.starts_with("CPU"))
+                .map(|s| s.1)
+                .sum::<f64>()
+                / self.frames as f64;
+            let parts: Vec<String> = self
+                .sums
+                .iter()
+                .map(|(n, sum, max)| format!("{n} {:.2}/{:.1}", sum / self.frames as f64, max))
+                .collect();
+            eprintln!("frame {total:.2} ms avg | {}", parts.join(" | "));
+            self.sums.clear();
+            self.frames = 0;
         }
     }
 }

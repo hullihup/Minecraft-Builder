@@ -291,6 +291,14 @@ __COMMON__
     /** Inventory holder that marks menus opened by "Open menu". */
     public static final class MenuHolder implements InventoryHolder {
         public final String id;
+        /** What "Open menu" asked for (before a replacement), to rebuild the menu. */
+        String baseTitle = "";
+        double baseRows = 3;
+        String baseItems = "";
+        /** Slots whose item may be taken out by the player. */
+        public final java.util.Set<Integer> takeable = new java.util.HashSet<>();
+        /** Click action per slot from the menu editor: {action, value, mouse button}. */
+        public final java.util.Map<Integer, String[]> actions = new java.util.HashMap<>();
         private Inventory inventory;
 
         MenuHolder(String id) {
@@ -305,6 +313,20 @@ __COMMON__
 
     public static void openMenu(Player p, String id, String title, double rows, String items) {
         MenuHolder holder = new MenuHolder(id);
+        holder.baseTitle = title;
+        holder.baseRows = rows;
+        holder.baseItems = items;
+        // "Replace menu": first for everyone, then for this player.
+        for (String[] o : new String[][] { menuOverride(menuStoreKey(p, true, id)), menuOverride(menuStoreKey(p, false, id)) }) {
+            if (o == null) continue;
+            if (o.length > 3 && o[3].equals("slots")) {
+                items = mergeMenuItems(items, o[2]);
+            } else {
+                title = o[0];
+                rows = num(o[1]);
+                items = o[2];
+            }
+        }
         int size = 9 * Math.max(1, Math.min(6, (int) rows));
         Inventory inv = Bukkit.createInventory(holder, size, color(title));
         holder.inventory = inv;
@@ -312,10 +334,598 @@ __COMMON__
             String[] e = menuLine(line);
             if (e == null) continue;
             int slot = (int) num(e[0]);
-            if (slot < 0 || slot >= size) continue;
-            inv.setItem(slot, customItem(e[1], 1, "", e[2], e[3]));
+            if (slot < 0 || slot >= size || e[1].equals("minecraft:air")) continue;
+            ItemStack is = customItem(e[1], num(e[4]), e[5], e[2], e[3]);
+            if (!e[7].isEmpty()) {
+                ItemMeta meta = is.getItemMeta();
+                if (meta != null) {
+                    meta.getPersistentDataContainer().set(menuKey(), org.bukkit.persistence.PersistentDataType.STRING, e[7]);
+                    is.setItemMeta(meta);
+                }
+            }
+            inv.setItem(slot, is);
+            if (e[6].contains("take")) holder.takeable.add(slot);
+            if (!e[8].isEmpty()) holder.actions.put(slot, new String[] { e[8], e[9], e[10] });
         }
         p.openInventory(inv);
+    }
+
+    static NamespacedKey menuKey() {
+        return new NamespacedKey(__MAIN__.INSTANCE, "menu_id");
+    }
+
+    /** The ID a menu slot got in the menu editor ("" if none). */
+    public static String menuId(ItemStack is) {
+        if (is == null || !is.hasItemMeta()) return "";
+        String v = is.getItemMeta().getPersistentDataContainer().get(menuKey(), org.bukkit.persistence.PersistentDataType.STRING);
+        return v == null ? "" : v;
+    }
+
+    /** "left", "right", "shift_left", "shift_right" or "other". */
+    public static String clickName(org.bukkit.event.inventory.ClickType c) {
+        return switch (c) {
+            case LEFT -> "left";
+            case RIGHT -> "right";
+            case SHIFT_LEFT -> "shift_left";
+            case SHIFT_RIGHT -> "shift_right";
+            default -> "other";
+        };
+    }
+
+    /** Does the click match the "Button" setting of "Menu click"? */
+    public static boolean clickMatches(org.bukkit.event.inventory.ClickType c, String want) {
+        return want.isEmpty() || want.equals("any") || clickName(c).equals(want);
+    }
+
+    // ----- recipes ----------------------------------------------------------------
+
+    static Material recipeMat(String id) {
+        if (id == null || id.isBlank()) return null;
+        Material m = Material.matchMaterial(id.trim());
+        return m == null || m.isAir() || !m.isItem() ? null : m;
+    }
+
+    /** Adds a recipe from the "Recipe" block. grid: 9 slots (shaped/shapeless) or the one input. */
+    /** Recipes that players get in their recipe book. */
+    static final List<NamespacedKey> DISCOVER = new ArrayList<>();
+
+    public static void discoverRecipes(Player p) {
+        if (!DISCOVER.isEmpty()) p.discoverRecipes(DISCOVER);
+    }
+
+    public static void addRecipe(String key, String type, String[] grid, ItemStack result, double xp, double seconds, boolean discover) {
+        NamespacedKey k = new NamespacedKey(__MAIN__.INSTANCE, key);
+        if (discover && !DISCOVER.contains(k)) DISCOVER.add(k);
+        Bukkit.removeRecipe(k);
+        int ticks = Math.max(1, (int) Math.round(seconds * 20));
+        Material first = null;
+        for (String g : grid) {
+            Material m = recipeMat(g);
+            if (m != null) {
+                first = m;
+                break;
+            }
+        }
+        if (first == null) {
+            __MAIN__.INSTANCE.getLogger().warning("Recipe " + key + ": no valid ingredient");
+            return;
+        }
+        org.bukkit.inventory.Recipe r;
+        switch (type) {
+            case "shapeless" -> {
+                org.bukkit.inventory.ShapelessRecipe s = new org.bukkit.inventory.ShapelessRecipe(k, result);
+                for (String g : grid) {
+                    Material m = recipeMat(g);
+                    if (m != null) s.addIngredient(m);
+                }
+                r = s;
+            }
+            case "smelting" -> r = new org.bukkit.inventory.FurnaceRecipe(k, result, first, (float) xp, ticks);
+            case "smoking" -> r = new org.bukkit.inventory.SmokingRecipe(k, result, first, (float) xp, ticks);
+            case "blasting" -> r = new org.bukkit.inventory.BlastingRecipe(k, result, first, (float) xp, ticks);
+            case "campfire" -> r = new org.bukkit.inventory.CampfireRecipe(k, result, first, (float) xp, ticks);
+            case "stonecutting" -> r = new org.bukkit.inventory.StonecuttingRecipe(k, result, first);
+            default -> {
+                // Shaped: only the used rows/columns, one letter per ingredient.
+                int r0 = 3, r1 = -1, c0 = 3, c1 = -1;
+                for (int i = 0; i < 9 && i < grid.length; i++) {
+                    if (recipeMat(grid[i]) == null) continue;
+                    r0 = Math.min(r0, i / 3);
+                    r1 = Math.max(r1, i / 3);
+                    c0 = Math.min(c0, i % 3);
+                    c1 = Math.max(c1, i % 3);
+                }
+                java.util.Map<Material, Character> keys = new java.util.LinkedHashMap<>();
+                String[] shape = new String[r1 - r0 + 1];
+                for (int row = r0; row <= r1; row++) {
+                    StringBuilder sb = new StringBuilder();
+                    for (int col = c0; col <= c1; col++) {
+                        Material m = row * 3 + col < grid.length ? recipeMat(grid[row * 3 + col]) : null;
+                        if (m == null) {
+                            sb.append(' ');
+                        } else {
+                            Character ch = keys.get(m);
+                            if (ch == null) {
+                                ch = (char) ('a' + keys.size());
+                                keys.put(m, ch);
+                            }
+                            sb.append(ch);
+                        }
+                    }
+                    shape[row - r0] = sb.toString();
+                }
+                org.bukkit.inventory.ShapedRecipe s = new org.bukkit.inventory.ShapedRecipe(k, result);
+                s.shape(shape);
+                for (java.util.Map.Entry<Material, Character> e : keys.entrySet()) s.setIngredient(e.getValue(), e.getKey());
+                r = s;
+            }
+        }
+        Bukkit.addRecipe(r);
+    }
+
+    // ----- replaced menus -------------------------------------------------------
+
+    static String menuStoreKey(Player p, boolean global, String id) {
+        return "menu." + (global || p == null ? "global" : p.getUniqueId().toString()) + "." + id;
+    }
+
+    /** A stored replacement: title, rows, items and (optional) "slots" for a partial one. */
+    static String[] menuOverride(String key) {
+        String v = Storage.getText(key);
+        if (v.isEmpty()) return null;
+        String[] parts = v.split("\u0001", 4);
+        return parts.length >= 3 ? parts : null;
+    }
+
+    /** Menu lines of `base` with the slots of `over` replaced ("minecraft:air" empties a slot). */
+    static String mergeMenuItems(String base, String over) {
+        return mergeMenuItems(base, over, false);
+    }
+
+    /** keepAir: keep "minecraft:air" lines (when two partial replacements are combined). */
+    static String mergeMenuItems(String base, String over, boolean keepAir) {
+        java.util.Map<Integer, String> lines = new java.util.TreeMap<>();
+        for (String l : base.split("\n")) {
+            String[] e = menuLine(l);
+            if (e != null) lines.put((int) num(e[0]), l);
+        }
+        for (String l : over.split("\n")) {
+            String[] e = menuLine(l);
+            if (e == null) continue;
+            if (e[1].equals("minecraft:air") && !keepAir) lines.remove((int) num(e[0]));
+            else lines.put((int) num(e[0]), l);
+        }
+        return String.join("\n", lines.values());
+    }
+
+    public static void replaceMenu(Player p, boolean global, String id, String title, double rows, String items, boolean onlySlots) {
+        if (!global && p == null) return;
+        String key = menuStoreKey(p, global, id);
+        if (onlySlots) {
+            // Several partial replacements add up.
+            String[] old = menuOverride(key);
+            if (old != null && old.length > 3 && old[3].equals("slots")) items = mergeMenuItems(old[2], items, true);
+            Storage.setText(key, title + "\u0001" + (int) rows + "\u0001" + items + "\u0001slots");
+        } else {
+            Storage.setText(key, title + "\u0001" + (int) rows + "\u0001" + items);
+        }
+        refreshMenu(p, global, id);
+    }
+
+    public static void resetMenu(Player p, boolean global, String id) {
+        if (!global && p == null) return;
+        Storage.removeText(menuStoreKey(p, global, id));
+        refreshMenu(p, global, id);
+    }
+
+    /** Players who have this menu open see the new layout right away (next tick, safe inside click events). */
+    static void refreshMenu(Player p, boolean global, String id) {
+        List<Player> targets = new ArrayList<>();
+        if (global) targets.addAll(Bukkit.getOnlinePlayers());
+        else if (p != null) targets.add(p);
+        Bukkit.getScheduler().runTask(__MAIN__.INSTANCE, () -> {
+            for (Player o : targets) {
+                if (o.getOpenInventory().getTopInventory().getHolder() instanceof MenuHolder h && h.id.equals(id)) {
+                    openMenu(o, id, h.baseTitle, h.baseRows, h.baseItems);
+                }
+            }
+        });
+    }
+
+    /** Keeps items inside menus unless their slot is marked as takeable. */
+    public static void menuGuard(org.bukkit.event.inventory.InventoryClickEvent event) {
+        if (!(event.getInventory().getHolder() instanceof MenuHolder holder)) return;
+        boolean top = event.getClickedInventory() == event.getView().getTopInventory();
+        if (!top) {
+            // Own inventory: only block moves that would push items into the menu.
+            if (event.isShiftClick() || event.getAction() == org.bukkit.event.inventory.InventoryAction.COLLECT_TO_CURSOR) {
+                event.setCancelled(true);
+            }
+            return;
+        }
+        boolean taking = switch (event.getAction()) {
+            case PICKUP_ALL, PICKUP_HALF, PICKUP_ONE, PICKUP_SOME, MOVE_TO_OTHER_INVENTORY -> true;
+            default -> false;
+        };
+        if (!(taking && holder.takeable.contains(event.getSlot()))) event.setCancelled(true);
+        String[] action = holder.actions.get(event.getSlot());
+        if (action != null && clickMatches(event.getClick(), action[2]) && event.getWhoClicked() instanceof Player p) {
+            // Next tick: opening or closing inventories inside a click event is not allowed.
+            Bukkit.getScheduler().runTask(__MAIN__.INSTANCE, () -> runMenuAction(p, action[0], action[1]));
+        }
+    }
+
+    // ----- click actions of the menu editor ---------------------------------------
+
+    /** Menus of "Open menu" blocks, so a click can open another menu (pages): id -> {title, rows, items}. */
+    static final java.util.Map<String, String[]> MENUS = new java.util.HashMap<>();
+
+    public static void registerMenu(String id, String title, double rows, String items) {
+        MENUS.putIfAbsent(id, new String[] { title, String.valueOf((int) rows), items });
+    }
+
+    public static void openRegistered(Player p, String id) {
+        String[] m = MENUS.get(id);
+        if (m == null) {
+            p.sendMessage(color("&cMenu not found: " + id));
+            return;
+        }
+        openMenu(p, id, m[0], num(m[1]), m[2]);
+    }
+
+    static void runMenuAction(Player p, String action, String value) {
+        String v = value == null ? "" : value.replace("{player}", p.getName());
+        switch (action) {
+            case "close" -> p.closeInventory();
+            case "command" -> p.performCommand(v.startsWith("/") ? v.substring(1) : v);
+            case "console" -> Bukkit.dispatchCommand(Bukkit.getConsoleSender(), v.startsWith("/") ? v.substring(1) : v);
+            case "message" -> p.sendMessage(color(v));
+            case "open" -> openRegistered(p, v.trim());
+            case "save_loc" -> {
+                saveLoc(uuid(p) + "." + v.trim(), p.getLocation());
+                p.sendMessage(color("&a\u2714 " + v.trim()));
+            }
+            case "tp_loc", "tp_warp" -> {
+                Location l = loadLoc((action.equals("tp_warp") ? "global" : uuid(p)) + "." + v.trim());
+                if (l == null) {
+                    p.sendMessage(color("&c" + v.trim() + " \u2716"));
+                } else {
+                    p.closeInventory();
+                    p.teleport(l);
+                }
+            }
+            default -> { }
+        }
+    }
+
+    public static void menuGuard(org.bukkit.event.inventory.InventoryDragEvent event) {
+        if (event.getInventory().getHolder() instanceof MenuHolder) event.setCancelled(true);
+    }
+
+    // ----- locations ------------------------------------------------------------
+
+    /** Location as text for storing: world;x;y;z;yaw;pitch */
+    public static String locToText(Location l) {
+        if (l == null || l.getWorld() == null) return "";
+        return l.getWorld().getName() + ";" + l.getX() + ";" + l.getY() + ";" + l.getZ() + ";" + l.getYaw() + ";" + l.getPitch();
+    }
+
+    /** Reads a stored location, null if there is none. */
+    public static Location locFromText(String s) {
+        if (s == null || s.isEmpty()) return null;
+        String[] p = s.split(";");
+        if (p.length < 4) return null;
+        World w = Bukkit.getWorld(p[0]);
+        if (w == null) return null;
+        try {
+            Location l = new Location(w, Double.parseDouble(p[1]), Double.parseDouble(p[2]), Double.parseDouble(p[3]));
+            if (p.length >= 6) {
+                l.setYaw(Float.parseFloat(p[4]));
+                l.setPitch(Float.parseFloat(p[5]));
+            }
+            return l;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    public static void saveLoc(String key, Location l) {
+        Storage.setText("loc." + key, locToText(l));
+    }
+
+    public static Location loadLoc(String key) {
+        return locFromText(Storage.getText("loc." + key));
+    }
+
+    /** The block the player looks at (or the player's position if there is none in range). */
+    public static Location lookLoc(Player p, double distance) {
+        org.bukkit.block.Block b = p.getTargetBlockExact(Math.max(1, Math.min(120, (int) distance)));
+        return b != null ? b.getLocation() : p.getLocation();
+    }
+
+    /** Middle of the block the location is in. */
+    public static Location blockLoc(Location l) {
+        return new Location(l.getWorld(), l.getBlockX() + 0.5, l.getBlockY(), l.getBlockZ() + 0.5, l.getYaw(), l.getPitch());
+    }
+
+    public static boolean inArea(Location l, Location a, Location b) {
+        if (l == null || a == null || b == null) return false;
+        if (l.getWorld() != a.getWorld() || l.getWorld() != b.getWorld()) return false;
+        return between(l.getX(), a.getX(), b.getX()) && between(l.getY(), a.getY(), b.getY()) && between(l.getZ(), a.getZ(), b.getZ());
+    }
+
+    public static Location spawnLoc(String world) {
+        return world(world).getSpawnLocation();
+    }
+
+    public static Location respawnLoc(Player p) {
+        Location l = p.getRespawnLocation();
+        return l != null ? l : p.getWorld().getSpawnLocation();
+    }
+
+    /** First free spot above the highest block at this x/z. */
+    public static Location surface(Location l) {
+        return l.getWorld().getHighestBlockAt(l).getLocation().add(0.5, 1, 0.5);
+    }
+
+    // ----- more resource pack blocks -------------------------------------------
+
+    /** Model id of an item (custom model if set, otherwise the item id). */
+    public static String modelOf(ItemStack is) {
+        if (is == null || is.getType().isAir()) return "minecraft:air";
+        ItemMeta meta = is.getItemMeta();
+        if (meta != null && meta.hasItemModel()) return meta.getItemModel().toString();
+        return is.getType().getKey().toString();
+    }
+
+    public static void setHeldModel(Player p, String model) {
+        ItemStack is = p.getInventory().getItemInMainHand();
+        if (is.getType().isAir()) return;
+        ItemMeta meta = is.getItemMeta();
+        if (meta == null) return;
+        meta.setItemModel(model == null || model.isBlank() ? null : NamespacedKey.fromString(model.trim().toLowerCase(Locale.ROOT)));
+        is.setItemMeta(meta);
+    }
+
+    public static double countModel(Player p, String model) {
+        int n = 0;
+        for (ItemStack is : p.getInventory().getContents()) {
+            if (is != null && modelOf(is).equalsIgnoreCase(model)) n += is.getAmount();
+        }
+        return n;
+    }
+
+    public static boolean takeModel(Player p, String model, double amount) {
+        int need = Math.max(1, (int) amount);
+        if (countModel(p, model) < need) return false;
+        ItemStack[] all = p.getInventory().getContents();
+        for (int i = 0; i < all.length && need > 0; i++) {
+            ItemStack is = all[i];
+            if (is == null || !modelOf(is).equalsIgnoreCase(model)) continue;
+            int take = Math.min(need, is.getAmount());
+            need -= take;
+            if (take >= is.getAmount()) p.getInventory().setItem(i, null); else is.setAmount(is.getAmount() - take);
+        }
+        return true;
+    }
+
+    public static void equipCustom(Player p, String slot, String id, String model, String name) {
+        org.bukkit.inventory.EquipmentSlot s = switch (slot) {
+            case "CHEST" -> org.bukkit.inventory.EquipmentSlot.CHEST;
+            case "LEGS" -> org.bukkit.inventory.EquipmentSlot.LEGS;
+            case "FEET" -> org.bukkit.inventory.EquipmentSlot.FEET;
+            case "OFFHAND" -> org.bukkit.inventory.EquipmentSlot.OFF_HAND;
+            case "MAINHAND" -> org.bukkit.inventory.EquipmentSlot.HAND;
+            default -> org.bukkit.inventory.EquipmentSlot.HEAD;
+        };
+        p.getInventory().setItem(s, customItem(id, 1, model, name, ""));
+    }
+
+    public static void dropCustom(Location l, String id, double amount, String model, String name) {
+        if (l == null || l.getWorld() == null) return;
+        l.getWorld().dropItemNaturally(l, customItem(id, amount, model, name, ""));
+    }
+
+    /** "Debug messages": tells OPs and the console which event ran. */
+    public static void debug(String msg) {
+        __MAIN__.INSTANCE.getLogger().info("[Debug] " + msg);
+        for (Player p : Bukkit.getOnlinePlayers()) {
+            if (p.isOp()) p.sendMessage(color("&8[&eDebug&8] &7" + msg));
+        }
+    }
+
+    // ----- own blocks, timers -----------------------------------------------------
+
+    /** "Function" blocks by name. */
+    public static final java.util.Map<String, java.util.function.Consumer<Player>> FUNCS = new java.util.HashMap<>();
+
+    public static void call(String name, Player p) {
+        java.util.function.Consumer<Player> f = FUNCS.get(name);
+        if (f == null) __MAIN__.INSTANCE.getLogger().warning("Unknown function: " + name);
+        else f.accept(p);
+    }
+
+    private static final java.util.Map<String, org.bukkit.scheduler.BukkitTask> TIMERS = new java.util.HashMap<>();
+
+    /** Runs later; a new timer with the same key replaces the old one. */
+    public static void timer(String key, double seconds, Runnable run) {
+        cancelTimer(key);
+        TIMERS.put(key, Bukkit.getScheduler().runTaskLater(__MAIN__.INSTANCE, () -> {
+            TIMERS.remove(key);
+            run.run();
+        }, Math.max(1L, (long) (seconds * 20))));
+    }
+
+    public static boolean cancelTimer(String key) {
+        org.bukkit.scheduler.BukkitTask t = TIMERS.remove(key);
+        if (t == null) return false;
+        t.cancel();
+        return true;
+    }
+
+    // ----- bans ---------------------------------------------------------------------
+
+    /** Screen text with placeholders filled in. */
+    static Component banScreen(String text, String name, long until) {
+        long left = until < 0 ? -1 : Math.max(0, until - System.currentTimeMillis());
+        return color(text.replace("{player}", name).replace("{time}", duration(left)));
+    }
+
+    /** seconds < 0 = forever. */
+    public static void ban(Player p, double seconds, String reason) {
+        if (p == null) return;
+        long until = seconds < 0 ? -1 : System.currentTimeMillis() + (long) (seconds * 1000);
+        Storage.setText("ban." + p.getUniqueId(), until + "\u0001" + p.getName() + "\u0001" + reason);
+        Storage.setText("banname." + p.getName().toLowerCase(Locale.ROOT), p.getUniqueId().toString());
+        p.kick(banScreen(reason, p.getName(), until));
+    }
+
+    public static boolean unban(String name) {
+        String key = "banname." + (name == null ? "" : name.trim().toLowerCase(Locale.ROOT));
+        String uuid = Storage.getText(key);
+        if (uuid.isEmpty()) return false;
+        Storage.removeText("ban." + uuid);
+        Storage.removeText(key);
+        return true;
+    }
+
+    public static boolean isBanned(String name) {
+        String uuid = Storage.getText("banname." + (name == null ? "" : name.trim().toLowerCase(Locale.ROOT)));
+        return !uuid.isEmpty() && banEntry(uuid) != null;
+    }
+
+    /** {until, name, reason} or null if not banned (expired bans are removed). */
+    static String[] banEntry(String uuid) {
+        String v = Storage.getText("ban." + uuid);
+        if (v.isEmpty()) return null;
+        String[] p = v.split("\u0001", 3);
+        if (p.length < 3) return null;
+        long until = (long) num(p[0]);
+        if (until >= 0 && until <= System.currentTimeMillis()) {
+            Storage.removeText("ban." + uuid);
+            return null;
+        }
+        return p;
+    }
+
+    public static void banCheck(org.bukkit.event.player.AsyncPlayerPreLoginEvent event) {
+        String[] e = banEntry(event.getUniqueId().toString());
+        if (e == null) return;
+        event.disallow(org.bukkit.event.player.AsyncPlayerPreLoginEvent.Result.KICK_BANNED,
+                banScreen(e[2], event.getName(), (long) num(e[0])));
+    }
+
+    /** Is the location inside the box between two corners of a world? */
+    public static boolean inBox(Location l, String world, double x1, double y1, double z1, double x2, double y2, double z2) {
+        if (l == null || l.getWorld() == null || !l.getWorld().getName().equalsIgnoreCase(world.trim())) return false;
+        return between(l.getX(), x1, x2 + 1) && between(l.getY(), y1, y2 + 1) && between(l.getZ(), z1, z2 + 1);
+    }
+
+    // ----- holograms & NPCs ---------------------------------------------------------
+
+    static NamespacedKey tagKey() {
+        return new NamespacedKey(__MAIN__.INSTANCE, "tag");
+    }
+
+    static void tag(Entity e, String key) {
+        e.getPersistentDataContainer().set(tagKey(), org.bukkit.persistence.PersistentDataType.STRING, key);
+    }
+
+    public static String tagOf(Entity e) {
+        String v = e == null ? null : e.getPersistentDataContainer().get(tagKey(), org.bukkit.persistence.PersistentDataType.STRING);
+        return v == null ? "" : v;
+    }
+
+    /** Removes holograms / NPCs with this name (in loaded chunks). */
+    public static void removeTagged(String key) {
+        for (World w : Bukkit.getWorlds()) {
+            for (Entity e : w.getEntities()) {
+                if (tagOf(e).equals(key)) e.remove();
+            }
+        }
+    }
+
+    public static void hologram(Location l, String key, String text) {
+        if (l == null || l.getWorld() == null) return;
+        removeTagged(key);
+        l.getWorld().spawn(l, org.bukkit.entity.TextDisplay.class, d -> {
+            d.text(color(text.replace("|", "\n")));
+            d.setBillboard(org.bukkit.entity.Display.Billboard.CENTER);
+            d.setPersistent(true);
+            tag(d, key);
+        });
+    }
+
+    public static void npc(Location l, String key, String name, String type) {
+        if (l == null || l.getWorld() == null) return;
+        removeTagged(key);
+        EntityType t = RegistryAccess.registryAccess().getRegistry(RegistryKey.ENTITY_TYPE).get(key(type));
+        if (t == null || !t.isSpawnable() || !t.isAlive()) t = EntityType.VILLAGER;
+        Entity e = l.getWorld().spawnEntity(l, t);
+        e.customName(color(name));
+        e.setCustomNameVisible(true);
+        e.setInvulnerable(true);
+        e.setPersistent(true);
+        e.setSilent(true);
+        if (e instanceof org.bukkit.entity.LivingEntity le) {
+            le.setAI(false);
+            le.setRemoveWhenFarAway(false);
+        }
+        tag(e, key);
+    }
+
+    // ----- money, ranks ---------------------------------------------------------------
+
+    public static double money(Player p) {
+        return Storage.getNum("money." + uuid(p));
+    }
+
+    public static void moneyAdd(Player p, double amount) {
+        Storage.setNum("money." + uuid(p), Math.max(0, money(p) + amount));
+    }
+
+    public static boolean moneyTake(Player p, double amount) {
+        if (money(p) < amount) return false;
+        Storage.setNum("money." + uuid(p), money(p) - amount);
+        return true;
+    }
+
+    public static void setPrefix(Player p, String prefix) {
+        if (p == null) return;
+        Storage.setText("prefix." + p.getUniqueId(), prefix == null ? "" : prefix);
+        applyRank(p);
+    }
+
+    public static String prefix(Player p) {
+        return p == null ? "" : Storage.getText("prefix." + p.getUniqueId());
+    }
+
+    private static final java.util.Map<java.util.UUID, org.bukkit.permissions.PermissionAttachment> PERMS = new java.util.HashMap<>();
+
+    public static void setPerm(Player p, String perm, boolean on) {
+        if (p == null || perm == null || perm.isBlank()) return;
+        String key = "perms." + p.getUniqueId();
+        java.util.Set<String> set = new java.util.TreeSet<>();
+        for (String x : Storage.getText(key).split(",")) if (!x.isBlank()) set.add(x);
+        if (on) set.add(perm.trim()); else set.remove(perm.trim());
+        Storage.setText(key, String.join(",", set));
+        applyRank(p);
+    }
+
+    /** Prefix (tab list + chat name) and stored permissions; called on join. */
+    public static void applyRank(Player p) {
+        String prefix = prefix(p);
+        Component name = prefix.isEmpty() ? Component.text(p.getName()) : color(prefix + " &r" + p.getName());
+        p.displayName(name);
+        p.playerListName(name);
+        org.bukkit.permissions.PermissionAttachment old = PERMS.remove(p.getUniqueId());
+        if (old != null) p.removeAttachment(old);
+        String perms = Storage.getText("perms." + p.getUniqueId());
+        if (!perms.isEmpty()) {
+            org.bukkit.permissions.PermissionAttachment a = p.addAttachment(__MAIN__.INSTANCE);
+            for (String x : perms.split(",")) if (!x.isBlank()) a.setPermission(x, true);
+            PERMS.put(p.getUniqueId(), a);
+        }
     }
 
     // ----- settings (config.yml) --------------------------------------------------

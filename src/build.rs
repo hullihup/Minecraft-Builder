@@ -64,6 +64,7 @@ pub fn start(
     project_file: Option<PathBuf>,
     dir: PathBuf,
     run_gradle: bool,
+    server: Option<crate::server::ServerConfig>,
     ctx: egui::Context,
 ) -> Job {
     let (tx, rx) = channel();
@@ -80,6 +81,7 @@ pub fn start(
             project_file.as_deref(),
             &dir,
             run_gradle,
+            server.as_ref(),
             &tx,
             &cancel,
             &child,
@@ -95,6 +97,7 @@ fn run(
     project_file: Option<&Path>,
     dir: &Path,
     run_gradle: bool,
+    server: Option<&crate::server::ServerConfig>,
     tx: &Sender<Msg>,
     cancel: &AtomicBool,
     child_slot: &Mutex<Option<Child>>,
@@ -224,6 +227,29 @@ fn run(
     );
     if !project.settings.deploy_dir.trim().is_empty() {
         deploy(project, &jar, tx);
+    }
+    if let Some(server) = server {
+        send(
+            tx,
+            Level::Info,
+            format!(
+                "Lade {} auf den Server „{}“ hoch…",
+                jar.file_name().unwrap_or_default().to_string_lossy(),
+                server.display_name()
+            ),
+        );
+        let folder = match project.settings.platform {
+            Platform::Paper => "plugins",
+            Platform::Fabric => "mods",
+        };
+        match crate::server::deploy(server, &jar, folder, &project.settings.id) {
+            Ok(lines) => {
+                for l in lines {
+                    send(tx, Level::Done, l);
+                }
+            }
+            Err(e) => send(tx, Level::Error, format!("Upload fehlgeschlagen: {e}")),
+        }
     }
     Ok(jar)
 }
@@ -519,6 +545,43 @@ pub struct AppSettings {
     /// Download and install updates automatically.
     #[serde(default = "default_true")]
     pub auto_update: bool,
+    /// Show a short description on every block.
+    #[serde(default = "default_true")]
+    pub block_descriptions: bool,
+    /// Show the block number (#12) in block headers.
+    #[serde(default)]
+    pub block_ids: bool,
+    /// Show the type name next to output sockets.
+    #[serde(default = "default_true")]
+    pub pin_types: bool,
+    /// Animated dots on the wires that show the flow direction.
+    #[serde(default = "default_true")]
+    pub wire_flow: bool,
+    /// Use item textures from a Minecraft installation on this computer in the menu editor.
+    #[serde(default = "default_true")]
+    pub vanilla_textures: bool,
+    /// Vanilla textures and models: a template resource pack (.zip) or the
+    /// Minecraft client .jar (empty = look for an installed Minecraft).
+    #[serde(default, alias = "minecraft_jar")]
+    pub texture_source: String,
+    /// Save the project automatically before building.
+    #[serde(default = "default_true")]
+    pub autosave_on_build: bool,
+    /// Game server panels the built jar can be uploaded to.
+    #[serde(default)]
+    pub servers: Vec<crate::server::ServerConfig>,
+    #[serde(default)]
+    pub next_server_id: u64,
+    /// Views moved away from their usual side.
+    #[serde(default)]
+    pub docks: Vec<(crate::app::View, crate::app::Dock)>,
+    /// MCP server for AI assistants: on/off, port and secret part of the address.
+    #[serde(default)]
+    pub mcp_enabled: bool,
+    #[serde(default)]
+    pub mcp_port: u16,
+    #[serde(default)]
+    pub mcp_token: String,
 }
 
 fn default_true() -> bool {
@@ -537,11 +600,24 @@ impl Default for AppSettings {
             recent_blocks: vec![],
             favorite_blocks: vec![],
             auto_update: true,
+            block_descriptions: true,
+            block_ids: false,
+            pin_types: true,
+            wire_flow: true,
+            vanilla_textures: true,
+            texture_source: String::new(),
+            autosave_on_build: true,
+            servers: vec![],
+            next_server_id: 1,
+            docks: vec![],
+            mcp_enabled: false,
+            mcp_port: 8765,
+            mcp_token: String::new(),
         }
     }
 }
 
-fn config_dir() -> PathBuf {
+pub fn config_dir() -> PathBuf {
     let base = if cfg!(windows) {
         std::env::var_os("APPDATA").map(PathBuf::from)
     } else {
@@ -579,6 +655,34 @@ impl AppSettings {
         if let Ok(s) = serde_json::to_string_pretty(self) {
             let _ = std::fs::write(dir.join("settings.json"), s);
         }
+    }
+    /// The zip/jar the vanilla item pictures come from, if any.
+    /// The Minecraft textures to use. Looking on disk is slow (the .minecraft search
+    /// lists folders), so the answer is kept for a few seconds.
+    pub fn vanilla_source(&self) -> Option<PathBuf> {
+        type Cached = Option<(std::time::Instant, String, Option<PathBuf>)>;
+        static CACHE: std::sync::Mutex<Cached> = std::sync::Mutex::new(None);
+        let custom = self.texture_source.trim().to_string();
+        if let Ok(c) = CACHE.lock() {
+            if let Some((at, key, found)) = c.as_ref() {
+                if *key == custom && at.elapsed().as_secs_f32() < 5.0 {
+                    return found.clone();
+                }
+            }
+        }
+        let found = if !custom.is_empty() {
+            let p = PathBuf::from(&custom);
+            p.is_file().then_some(p)
+        } else {
+            crate::resourcepack::find_minecraft_jar()
+        };
+        if let Ok(mut c) = CACHE.lock() {
+            *c = Some((std::time::Instant::now(), custom, found.clone()));
+        }
+        found
+    }
+    pub fn server(&self, id: u64) -> Option<&crate::server::ServerConfig> {
+        self.servers.iter().find(|s| s.id == id && id != 0)
     }
     pub fn add_recent(&mut self, p: &Path) {
         self.recent.retain(|r| r != p);

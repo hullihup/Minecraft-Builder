@@ -74,6 +74,29 @@ public final class Storage {
         save();
     }
 
+    public static synchronized boolean hasText(String key) {
+        return DATA.containsKey("t." + key);
+    }
+
+    public static synchronized void removeText(String key) {
+        if (DATA.remove("t." + key) != null) save();
+    }
+
+    /** Names stored under a prefix (e.g. all homes of a player), sorted, separated by ", ". */
+    public static synchronized String names(String prefix) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        for (String k : DATA.stringPropertyNames()) {
+            if (k.startsWith("t." + prefix) && !DATA.getProperty(k, "").isEmpty()) out.add(k.substring(2 + prefix.length()));
+        }
+        java.util.Collections.sort(out);
+        return String.join(", ", out);
+    }
+
+    public static synchronized double count(String prefix) {
+        String n = names(prefix);
+        return n.isEmpty() ? 0 : n.split(", ").length;
+    }
+
     public static synchronized void remove(String key) {
         DATA.remove(key);
         DATA.remove("t." + key);

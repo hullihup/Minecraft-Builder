@@ -1,6 +1,6 @@
 //! Menu bar, activity bar, sidebar, inspector, console, tabs and status bar.
 
-use crate::app::{Activity, App, BottomTab, ConsoleFilter, Dialog, Palette, RightTab};
+use crate::app::{Activity, App, BottomTab, ConsoleFilter, Dialog, Dock, Palette, View};
 use crate::blocks::{self, CATEGORIES, Kind, PinType, Special};
 use crate::build::Level;
 use crate::i18n::{is_german, t, tl};
@@ -216,6 +216,17 @@ fn menus(app: &mut App, ui: &mut Ui) {
     });
     ui.menu_button(t("Bearbeiten", "Edit"), |ui| {
         if ui
+            .button(t("Suchen & Ersetzen…", "Search & replace…"))
+            .clicked()
+        {
+            app.dialog = crate::app::Dialog::Replace {
+                find: String::new(),
+                with: String::new(),
+            };
+            ui.close();
+        }
+        ui.separator();
+        if ui
             .add_enabled(
                 app.can_undo(),
                 egui::Button::new(t("Rückgängig   Strg+Z", "Undo   Ctrl+Z")),
@@ -349,7 +360,7 @@ fn menus(app: &mut App, ui: &mut Ui) {
             .button(t("Einstellungen & Versionen…", "Settings & versions…"))
             .clicked()
         {
-            app.activity = Activity::Project;
+            app.show_view(Activity::Project);
             app.show_sidebar = true;
         }
         if ui
@@ -530,8 +541,7 @@ pub fn status_bar(app: &mut App, ui: &mut Ui) {
                     )
                     .clicked()
                 {
-                    app.show_bottom = true;
-                    app.bottom_tab = BottomTab::Problems;
+                    app.show_view(BottomTab::Problems);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let s = &app.project.settings;
@@ -567,6 +577,8 @@ pub fn status_bar(app: &mut App, ui: &mut Ui) {
 // ----------------------------------------------------------- activity bar
 
 pub fn activity_bar(app: &mut App, ui: &mut Ui) {
+    let views = app.views_in(Dock::Left);
+    let active = app.active_in(Dock::Left);
     let resp = egui::Panel::left("activity_bar")
         .exact_size(46.0)
         .resizable(false)
@@ -577,49 +589,17 @@ pub fn activity_bar(app: &mut App, ui: &mut Ui) {
         )
         .show(ui, |ui| {
             ui.add_space(6.0);
-            let items = [
-                (
-                    Activity::Workspaces,
-                    Icon::Layers,
-                    t("Arbeitsbereiche & Befehle", "Workspaces & commands"),
-                ),
-                (
-                    Activity::Blocks,
-                    Icon::Puzzle,
-                    t("Block-Bibliothek", "Block library"),
-                ),
-                (
-                    Activity::Resources,
-                    Icon::Image,
-                    t("Texturen & Modelle", "Textures & models"),
-                ),
-                (
-                    Activity::Config,
-                    Icon::Sliders,
-                    t("Einstellungen (config.yml)", "Settings (config.yml)"),
-                ),
-                (
-                    Activity::Project,
-                    Icon::Gear,
-                    t("Projekt & Versionen", "Project & versions"),
-                ),
-                (
-                    Activity::Build,
-                    Icon::Package,
-                    t("Bauen & Export", "Build & export"),
-                ),
-            ];
-            for (act, icon, tip) in items {
-                let active = app.activity == act && app.show_sidebar;
-                let (r, resp) = ui.allocate_exact_size(vec2(46.0, 42.0), Sense::click());
-                if active {
+            for act in views {
+                let on = active == Some(act) && app.show_sidebar;
+                let (r, resp) = ui.allocate_exact_size(vec2(46.0, 42.0), Sense::click_and_drag());
+                if on {
                     ui.painter().rect_filled(
                         egui::Rect::from_min_size(r.min, vec2(2.0, r.height())),
                         0.0,
                         theme::ACCENT,
                     );
                 }
-                let col = if active || resp.hovered() {
+                let col = if on || resp.hovered() {
                     theme::TEXT
                 } else {
                     theme::TEXT_WEAK
@@ -627,11 +607,24 @@ pub fn activity_bar(app: &mut App, ui: &mut Ui) {
                 icons::paint(
                     ui.painter(),
                     egui::Rect::from_center_size(r.center(), vec2(21.0, 21.0)),
-                    icon,
+                    act.icon(),
                     col,
                 );
-                if resp.clone().on_hover_text(tip).clicked() {
-                    if app.activity == act && app.show_sidebar {
+                resp.dnd_set_drag_payload(act);
+                move_menu(app, &resp, act);
+                if resp
+                    .clone()
+                    .on_hover_text(format!(
+                        "{}\n{}",
+                        act.label(),
+                        t(
+                            "Ziehen oder Rechtsklick: verschieben",
+                            "Drag or right-click: move"
+                        )
+                    ))
+                    .clicked()
+                {
+                    if on {
                         app.show_sidebar = false;
                     } else {
                         app.activity = act;
@@ -639,29 +632,178 @@ pub fn activity_bar(app: &mut App, ui: &mut Ui) {
                     }
                 }
             }
+            // Settings: always at the bottom left.
+            ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+                ui.add_space(6.0);
+                if settings_gear(ui, 36.0).clicked() {
+                    crate::ui::settings::open(app, crate::ui::settings::Tab::General);
+                }
+            });
         });
     app.ui_rects.insert("activity", resp.response.rect);
+}
+
+/// Right-click menu of a tab / icon: move the view to another side.
+fn move_menu(app: &mut App, resp: &egui::Response, v: View) {
+    let cur = app.dock_of(v);
+    resp.context_menu(|ui| {
+        ui.label(RichText::new(v.label()).strong());
+        ui.separator();
+        for (d, label) in [
+            (Dock::Left, t("Nach links verschieben", "Move to the left")),
+            (
+                Dock::Right,
+                t("Nach rechts verschieben", "Move to the right"),
+            ),
+            (
+                Dock::Bottom,
+                t("Nach unten verschieben", "Move to the bottom"),
+            ),
+        ] {
+            if ui.add_enabled(d != cur, egui::Button::new(label)).clicked() {
+                app.move_view(v, d);
+                ui.close();
+            }
+        }
+        if cur != v.default_dock()
+            && ui
+                .button(t("Zurück an den alten Platz", "Back to its usual place"))
+                .clicked()
+        {
+            app.move_view(v, v.default_dock());
+            ui.close();
+        }
+    });
+}
+
+/// Content of a view, wherever it is docked.
+fn view_ui(app: &mut App, ui: &mut Ui, v: View) {
+    let scroll = |app: &mut App, ui: &mut Ui, f: fn(&mut App, &mut Ui)| {
+        egui::ScrollArea::vertical()
+            .id_salt(("view_scroll", v))
+            .auto_shrink([false, false])
+            .show(ui, |ui| f(app, ui));
+    };
+    match v {
+        View::Workspaces => scroll(app, ui, sidebar_workspaces),
+        View::Blocks => scroll(app, ui, sidebar_blocks),
+        View::Project => scroll(app, ui, sidebar_project),
+        View::Build => scroll(app, ui, sidebar_build),
+        View::Resources => scroll(app, ui, crate::ui::resources::sidebar),
+        View::Config => scroll(app, ui, crate::ui::config::sidebar),
+        View::Plugins => scroll(app, ui, crate::ui::plugins::sidebar),
+        View::Inspector => scroll(app, ui, inspector),
+        View::Code => code_view(app, ui),
+        View::Console => console(app, ui),
+        View::Problems => problems(app, ui),
+        View::Server => server_console(app, ui),
+    }
+}
+
+/// While a view is dragged: drop zones at the three sides.
+pub fn drop_zones(app: &mut App, ctx: &egui::Context) {
+    let Some(v) = egui::DragAndDrop::payload::<View>(ctx).map(|p| *p) else {
+        return;
+    };
+    let screen = ctx.content_rect();
+    let zones = [
+        (
+            Dock::Left,
+            egui::Rect::from_min_max(
+                screen.min + vec2(0.0, 40.0),
+                egui::pos2(screen.left() + 220.0, screen.bottom() - 24.0),
+            ),
+            t("Links", "Left"),
+        ),
+        (
+            Dock::Right,
+            egui::Rect::from_min_max(
+                egui::pos2(screen.right() - 220.0, screen.top() + 40.0),
+                screen.max - vec2(0.0, 24.0),
+            ),
+            t("Rechts", "Right"),
+        ),
+        (
+            Dock::Bottom,
+            egui::Rect::from_min_max(
+                egui::pos2(screen.left() + 230.0, screen.bottom() - 170.0),
+                egui::pos2(screen.right() - 230.0, screen.bottom() - 24.0),
+            ),
+            t("Unten", "Bottom"),
+        ),
+    ];
+    let pointer = ctx.pointer_latest_pos();
+    let released = ctx.input(|i| i.pointer.any_released());
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Tooltip,
+        egui::Id::new("dock_zones"),
+    ));
+    let cur = app.dock_of(v);
+    let mut target = None;
+    for (d, r, label) in zones {
+        let hov = pointer.map(|p| r.contains(p)).unwrap_or(false);
+        let col = if hov { theme::ACCENT } else { theme::TEXT_WEAK };
+        painter.rect(
+            r.shrink(6.0),
+            10.0,
+            col.gamma_multiply(if hov { 0.28 } else { 0.10 }),
+            Stroke::new(if hov { 2.0 } else { 1.0 }, col),
+            egui::StrokeKind::Inside,
+        );
+        painter.text(
+            r.center(),
+            egui::Align2::CENTER_CENTER,
+            if d == cur {
+                format!("{label} ✔")
+            } else {
+                format!("{} → {label}", v.label())
+            },
+            egui::FontId::proportional(15.0),
+            if hov { theme::TEXT } else { theme::TEXT_WEAK },
+        );
+        if hov {
+            target = Some(d);
+        }
+    }
+    if released {
+        egui::DragAndDrop::clear_payload(ctx);
+        if let Some(d) = target {
+            if d != cur {
+                app.move_view(v, d);
+            }
+        }
+    }
+}
+
+/// The settings button (gear) shown at the bottom left on every screen.
+pub fn settings_gear(ui: &mut Ui, size: f32) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
+    let hov = resp.hovered();
+    if hov {
+        ui.painter()
+            .rect_filled(r, 8.0, Color32::from_white_alpha(16));
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    icons::paint(
+        ui.painter(),
+        egui::Rect::from_center_size(r.center(), vec2(size * 0.58, size * 0.58)),
+        Icon::Gear,
+        if hov { theme::TEXT } else { theme::TEXT_WEAK },
+    );
+    resp.on_hover_text(t("Einstellungen", "Settings"))
 }
 
 // --------------------------------------------------------------- sidebar
 
 pub fn sidebar(app: &mut App, ui: &mut Ui) {
+    let Some(v) = app.active_in(Dock::Left) else {
+        return;
+    };
     egui::Panel::left("sidebar")
         .default_size(270.0)
         .size_range(200.0..=460.0)
         .frame(panel_frame(theme::BG_SIDEBAR).inner_margin(Margin::symmetric(10, 10)))
-        .show(ui, |ui| {
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| match app.activity {
-                    Activity::Workspaces => sidebar_workspaces(app, ui),
-                    Activity::Blocks => sidebar_blocks(app, ui),
-                    Activity::Project => sidebar_project(app, ui),
-                    Activity::Build => sidebar_build(app, ui),
-                    Activity::Resources => crate::ui::resources::sidebar(app, ui),
-                    Activity::Config => crate::ui::config::sidebar(app, ui),
-                });
-        });
+        .show(ui, |ui| view_ui(app, ui, v));
 }
 
 fn list_item(
@@ -906,7 +1048,7 @@ fn sidebar_blocks(app: &mut App, ui: &mut Ui) {
                         let c = app.canvas.rect.center();
                         let view = *app.view();
                         let scene = ((c - app.canvas.rect.min) - view.pan) / view.zoom;
-                        app.add_node(d.id, scene.to_pos2());
+                        app.add_node_auto(d.id, scene.to_pos2());
                     }
                 }
             });
@@ -1147,7 +1289,91 @@ fn sidebar_build(app: &mut App, ui: &mut Ui) {
         });
         ui.add_space(10.0);
     }
-    section_header(ui, t("Test-Server", "Test server"));
+    section_header(ui, t("Fehlersuche", "Finding mistakes"));
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        widgets::toggle(ui, &mut app.project.settings.debug);
+        ui.label(RichText::new(t("Debug-Meldungen im Spiel", "Debug messages in game")).size(12.5));
+    });
+    ui.label(
+        RichText::new(t(
+            "OPs sehen im Chat, welches Event gerade läuft und für wen – so findest du schnell, wo etwas hängt. Vor dem Veröffentlichen wieder ausschalten.",
+            "OPs see in chat which event runs and for whom – so you quickly find where something hangs. Switch it off again before publishing.",
+        ))
+        .size(11.0)
+        .color(theme::TEXT_WEAK),
+    );
+    ui.add_space(14.0);
+    section_header(
+        ui,
+        t(
+            "Server (automatisch hochladen)",
+            "Server (automatic upload)",
+        ),
+    );
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new(match app.project.settings.platform {
+            Platform::Paper => t(
+                "Nach jedem Build landet die .jar im Ordner plugins/ deines Servers.",
+                "After every build the jar ends up in your server's plugins/ folder.",
+            ),
+            Platform::Fabric => t(
+                "Nach jedem Build landet die .jar im Ordner mods/ deines Servers.",
+                "After every build the jar ends up in your server's mods/ folder.",
+            ),
+        })
+        .size(11.0)
+        .color(theme::TEXT_WEAK),
+    );
+    ui.add_space(4.0);
+    {
+        let current = app.project.settings.deploy_server;
+        let label = app
+            .settings
+            .server(current)
+            .map(|s| s.display_name())
+            .unwrap_or_else(|| t("(kein Server)", "(no server)").to_string());
+        let mut pick = current;
+        egui::ComboBox::from_id_salt("deploy_server")
+            .width(ui.available_width())
+            .selected_text(label)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut pick, 0, t("(kein Server)", "(no server)"));
+                for s in &app.settings.servers {
+                    ui.selectable_value(&mut pick, s.id, s.display_name());
+                }
+            });
+        app.project.settings.deploy_server = pick;
+        if let Some(s) = app.settings.server(pick) {
+            if !s.ready() {
+                ui.label(
+                    RichText::new(t(
+                        "Dieser Server ist noch nicht fertig eingerichtet.",
+                        "This server is not set up completely yet.",
+                    ))
+                    .size(11.0)
+                    .color(theme::YELLOW),
+                );
+            }
+        }
+        ui.add_space(4.0);
+        if icons::button(
+            ui,
+            Some(Icon::Cloud),
+            if app.settings.servers.is_empty() {
+                t("Server verbinden…", "Connect a server…")
+            } else {
+                t("Server verwalten…", "Manage servers…")
+            },
+        )
+        .clicked()
+        {
+            crate::ui::settings::open(app, crate::ui::settings::Tab::Servers);
+        }
+    }
+    ui.add_space(14.0);
+    section_header(ui, t("Lokaler Test-Server", "Local test server"));
     ui.add_space(4.0);
     ui.label(
         RichText::new(match app.project.settings.platform {
@@ -1216,51 +1442,61 @@ fn sidebar_build(app: &mut App, ui: &mut Ui) {
 // ------------------------------------------------------------ right panel
 
 pub fn right_panel(app: &mut App, ui: &mut Ui) {
+    let Some(v) = app.active_in(Dock::Right) else {
+        return;
+    };
     let resp = egui::Panel::right("right_panel")
         .default_size(320.0)
         .size_range(240.0..=640.0)
         .frame(panel_frame(theme::BG_SIDEBAR))
         .show(ui, |ui| {
-            tab_strip(
-                ui,
-                &mut app.right_tab,
-                &[
-                    (RightTab::Inspector, Icon::Gear, t("Inspector", "Inspector")),
-                    (RightTab::Code, Icon::Code, t("Java-Code", "Java code")),
-                ],
-            );
+            tab_strip(app, ui, Dock::Right);
             egui::Frame::new()
                 .inner_margin(Margin::same(12))
-                .show(ui, |ui| match app.right_tab {
-                    RightTab::Inspector => {
-                        egui::ScrollArea::vertical()
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| inspector(app, ui));
-                    }
-                    RightTab::Code => code_view(app, ui),
-                });
+                .show(ui, |ui| view_ui(app, ui, v));
         });
     app.ui_rects.insert("right", resp.response.rect);
 }
 
-fn tab_strip<T: PartialEq + Copy>(ui: &mut Ui, current: &mut T, tabs: &[(T, Icon, &str)]) {
+/// Tabs of the views docked at a side. Tabs can be dragged to another side.
+fn tab_strip(app: &mut App, ui: &mut Ui, dock: Dock) {
+    let views = app.views_in(dock);
+    let current = app.active_in(dock);
     let (strip, _) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::hover());
     ui.painter().rect_filled(strip, 0.0, theme::BG_PANEL);
     ui.painter().line_segment(
         [strip.left_bottom(), strip.right_bottom()],
         Stroke::new(1.0, theme::BORDER),
     );
+    // Narrow docks show only icons for the tabs that are not active.
+    let full_w: f32 = views
+        .iter()
+        .map(|v| {
+            ui.painter()
+                .layout_no_wrap(
+                    tab_label(app, *v),
+                    egui::FontId::proportional(13.0),
+                    theme::TEXT,
+                )
+                .size()
+                .x
+                + 48.0
+        })
+        .sum();
+    let compact = full_w > strip.width();
     let mut x = strip.left();
-    for (tab, icon, label) in tabs {
+    for tab in views {
+        let active = current == Some(tab);
+        let label = tab_label(app, tab);
         let g = ui.painter().layout_no_wrap(
-            label.to_string(),
+            label.clone(),
             egui::FontId::proportional(13.0),
             theme::TEXT,
         );
-        let w = g.size().x + 48.0;
+        let show_text = !compact || active;
+        let w = if show_text { g.size().x + 48.0 } else { 38.0 };
         let r = egui::Rect::from_min_size(egui::pos2(x, strip.top()), vec2(w, strip.height()));
-        let resp = ui.interact(r, ui.scope_id().with(label), Sense::click());
-        let active = *current == *tab;
+        let resp = ui.interact(r, ui.id().with(("tab", tab)), Sense::click_and_drag());
         if active {
             ui.painter().rect_filled(r, 0.0, theme::BG_SIDEBAR);
             ui.painter().line_segment(
@@ -1279,15 +1515,39 @@ fn tab_strip<T: PartialEq + Copy>(ui: &mut Ui, current: &mut T, tabs: &[(T, Icon
         icons::paint(
             ui.painter(),
             egui::Rect::from_center_size(r.left_center() + vec2(20.0, 0.0), vec2(14.0, 14.0)),
-            *icon,
+            tab.icon(),
             if active { theme::ACCENT } else { col },
         );
-        ui.painter()
-            .galley(r.left_center() + vec2(34.0, -g.size().y / 2.0), g, col);
-        if resp.clicked() {
-            *current = *tab;
+        if show_text {
+            ui.painter()
+                .galley(r.left_center() + vec2(34.0, -g.size().y / 2.0), g, col);
+        }
+        resp.dnd_set_drag_payload(tab);
+        move_menu(app, &resp, tab);
+        if resp
+            .on_hover_text(format!(
+                "{label}\n{}",
+                t(
+                    "Ziehen oder Rechtsklick: verschieben",
+                    "Drag or right-click: move"
+                )
+            ))
+            .clicked()
+        {
+            match dock {
+                Dock::Right => app.right_tab = tab,
+                Dock::Bottom => app.bottom_tab = tab,
+                Dock::Left => app.activity = tab,
+            }
         }
         x += w;
+    }
+}
+
+fn tab_label(app: &App, v: View) -> String {
+    match v {
+        View::Problems => format!("{} {}", v.label(), app.problems.len()),
+        _ => v.label().to_string(),
     }
 }
 
@@ -1436,12 +1696,41 @@ fn inspector(app: &mut App, ui: &mut Ui) {
         }
 
         let w = ui.available_width();
+        let mut open_menu = false;
+        let mut open_recipe = false;
+        let mut open_screen = false;
         if !def.fields.is_empty() {
             section_header(ui, t("Einstellungen", "Settings"));
             ui.add_space(4.0);
             for f in &def.fields {
                 labeled(ui, tl(f.label), |ui| {
                     widgets::field_editor(ui, f, &mut node.values, w, ("insp_f", id, f.id));
+                    if matches!(f.kind, blocks::FieldKind::Menu)
+                        && icons::button(ui, Some(Icon::Chest), t("Menü bearbeiten", "Edit menu"))
+                            .clicked()
+                    {
+                        open_menu = true;
+                    }
+                    if matches!(f.kind, blocks::FieldKind::Screen)
+                        && icons::button(
+                            ui,
+                            Some(Icon::Edit),
+                            t("Bildschirm bearbeiten", "Edit screen"),
+                        )
+                        .clicked()
+                    {
+                        open_screen = true;
+                    }
+                    if matches!(f.kind, blocks::FieldKind::Recipe)
+                        && icons::button(
+                            ui,
+                            Some(Icon::Grid),
+                            t("Rezept bearbeiten", "Edit recipe"),
+                        )
+                        .clicked()
+                    {
+                        open_recipe = true;
+                    }
                 });
             }
         }
@@ -1485,6 +1774,12 @@ fn inspector(app: &mut App, ui: &mut Ui) {
                         }
                     },
                 );
+                ui.label(
+                    RichText::new(blocks::pin_help(def, p, false))
+                        .size(11.0)
+                        .color(theme::TEXT_WEAK),
+                );
+                ui.add_space(4.0);
             }
         }
         let outs: Vec<_> = def
@@ -1500,6 +1795,12 @@ fn inspector(app: &mut App, ui: &mut Ui) {
                     ui.label(RichText::new("●").color(p.ty.color()));
                     ui.label(format!("{} · {}", p.label.text(), tl(p.ty.label())));
                 });
+                ui.label(
+                    RichText::new(blocks::pin_help(def, p, true))
+                        .size(11.0)
+                        .color(theme::TEXT_WEAK),
+                );
+                ui.add_space(4.0);
             }
             ui.add_space(8.0);
         }
@@ -1520,6 +1821,15 @@ fn inspector(app: &mut App, ui: &mut Ui) {
                 delete = true;
             }
         });
+        if open_screen {
+            app.screen_edit = Some((ws_idx, id));
+        }
+        if open_recipe {
+            crate::ui::recipe_editor::open(app, ws_idx, id);
+        }
+        if open_menu {
+            app.menu_edit = Some(crate::ui::menu_editor::MenuEdit::new(ws_idx, id));
+        }
         if open_cmds {
             let cmd = app.project.workspaces[ws_idx]
                 .node(id)
@@ -1554,8 +1864,18 @@ fn code_view(app: &mut App, ui: &mut Ui) {
     egui::ScrollArea::both()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            let job = java_highlight(&app.code_preview);
-            ui.add(egui::Label::new(job).selectable(true).extend());
+            // Highlighting and laying out thousands of lines is only redone when the code changes.
+            let ppp = ui.ctx().pixels_per_point();
+            let fresh =
+                matches!(&app.code_galley, Some((c, p, _)) if *c == app.code_preview && *p == ppp);
+            if !fresh {
+                let job = java_highlight(&app.code_preview);
+                let g = ui.fonts_mut(|f| f.layout_job(job));
+                app.code_galley = Some((app.code_preview.clone(), ppp, g));
+            }
+            if let Some((_, _, g)) = &app.code_galley {
+                ui.add(egui::Label::new(g.clone()).selectable(true).extend());
+            }
         });
 }
 
@@ -1674,32 +1994,179 @@ fn java_highlight(code: &str) -> egui::text::LayoutJob {
 // ----------------------------------------------------------- bottom panel
 
 pub fn bottom_panel(app: &mut App, ui: &mut Ui) {
+    let Some(v) = app.active_in(Dock::Bottom) else {
+        return;
+    };
     let resp = egui::Panel::bottom("bottom_panel")
         .resizable(true)
         .default_size(200.0)
         .size_range(90.0..=600.0)
         .frame(panel_frame(theme::BG_PANEL))
         .show(ui, |ui| {
-            let errors = app.problems.iter().filter(|p| p.error).count();
-            let probs_label = format!("{} {}", t("Probleme", "Problems"), app.problems.len());
-            let cons_label = t("Konsole", "Console").to_string();
-            tab_strip(
-                ui,
-                &mut app.bottom_tab,
-                &[
-                    (BottomTab::Console, Icon::Keyboard, &cons_label),
-                    (BottomTab::Problems, Icon::Warning, &probs_label),
-                ],
-            );
-            let _ = errors;
+            tab_strip(app, ui, Dock::Bottom);
             egui::Frame::new()
                 .inner_margin(Margin::symmetric(12, 8))
-                .show(ui, |ui| match app.bottom_tab {
-                    BottomTab::Console => console(app, ui),
-                    BottomTab::Problems => problems(app, ui),
-                });
+                .show(ui, |ui| view_ui(app, ui, v));
         });
     app.ui_rects.insert("bottom", resp.response.rect);
+}
+
+/// Live console of the server the project uploads to (polled every few seconds).
+fn server_console(app: &mut App, ui: &mut Ui) {
+    let ctx = ui.ctx().clone();
+    let Some(cfg) = app
+        .settings
+        .server(app.project.settings.deploy_server)
+        .filter(|s| s.ready())
+        .cloned()
+    else {
+        ui.label(
+            RichText::new(t(
+                "Für dieses Projekt ist kein Server ausgewählt. Wähle einen unter „Bauen & Export“ → „Server“, dann siehst du hier seine Konsole.",
+                "No server is picked for this project. Pick one under “Build & export” → “Server”, then you see its console here.",
+            ))
+            .color(theme::TEXT_WEAK),
+        );
+        if ui
+            .button(t("Server verbinden…", "Connect a server…"))
+            .clicked()
+        {
+            crate::ui::settings::open(app, crate::ui::settings::Tab::Servers);
+        }
+        return;
+    };
+    let now = ctx.input(|i| i.time);
+    let sc = &mut app.server_console;
+    // Results of background requests.
+    if let Some(rx) = &sc.rx {
+        if let Ok(r) = rx.try_recv() {
+            sc.rx = None;
+            match r {
+                Ok(text) => {
+                    sc.text = crate::server::strip_ansi(&text);
+                    sc.error = None;
+                }
+                Err(e) => sc.error = Some(e),
+            }
+        }
+    }
+    if let Some(rx) = &sc.action_rx {
+        if let Ok(r) = rx.try_recv() {
+            sc.action_rx = None;
+            sc.status = match r {
+                Ok(s) => s,
+                Err(e) => format!("✖ {e}"),
+            };
+            sc.last_poll = 0.0;
+        }
+    }
+    if sc.rx.is_none() && now - sc.last_poll > 3.0 {
+        sc.last_poll = now;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (c, ctx2) = (cfg.clone(), ctx.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::server::fetch_logs(&c, 300));
+            ctx2.request_repaint();
+        });
+        sc.rx = Some(rx);
+    }
+    ctx.request_repaint_after(std::time::Duration::from_millis(500));
+
+    let mut action: Option<(&'static str, String)> = None;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(cfg.display_name()).strong());
+        for (act, label) in [
+            ("start", t("Starten", "Start")),
+            ("restart", t("Neu starten", "Restart")),
+            ("stop", t("Stoppen", "Stop")),
+        ] {
+            if ui.small_button(label).clicked() {
+                action = Some(("power", act.to_string()));
+            }
+        }
+        if !sc.status.is_empty() {
+            ui.label(RichText::new(&sc.status).size(11.5).color(theme::TEXT_WEAK));
+        }
+        if let Some(e) = &sc.error {
+            ui.label(RichText::new(e).size(11.5).color(theme::RED));
+        }
+    });
+    let h = (ui.available_height() - 34.0).max(40.0);
+    egui::Frame::new()
+        .fill(theme::INPUT_BG)
+        .corner_radius(4)
+        .inner_margin(6)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            egui::ScrollArea::vertical()
+                .max_height(h)
+                .auto_shrink([false, false])
+                .stick_to_bottom(true)
+                // Only the visible lines are laid out.
+                .show_rows(ui, 16.0, sc.text.lines().count().max(1), |ui, range| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    if sc.text.is_empty() {
+                        ui.label(
+                            RichText::new(t("Lade Konsole…", "Loading console…"))
+                                .color(theme::TEXT_WEAK),
+                        );
+                    }
+                    for line in sc.text.lines().skip(range.start).take(range.len()) {
+                        let col = if line.contains("ERROR")
+                            || line.contains("Exception")
+                            || line.trim_start().starts_with("at ")
+                        {
+                            theme::RED
+                        } else if line.contains("WARN") {
+                            theme::YELLOW
+                        } else if line.contains("[Debug]") {
+                            theme::ACCENT
+                        } else {
+                            theme::TEXT
+                        };
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), 16.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(line).monospace().size(12.0).color(col),
+                                    )
+                                    .truncate(),
+                                )
+                            },
+                        );
+                    }
+                });
+        });
+    ui.horizontal(|ui| {
+        let te = ui.add(
+            egui::TextEdit::singleline(&mut sc.input)
+                .hint_text(t(
+                    "Befehl an den Server, z. B. say Hallo",
+                    "Command for the server, e.g. say Hello",
+                ))
+                .desired_width(ui.available_width() - 90.0),
+        );
+        let enter = te.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if (ui.button(t("Senden", "Send")).clicked() || enter) && !sc.input.trim().is_empty() {
+            action = Some(("command", std::mem::take(&mut sc.input)));
+        }
+    });
+    if let Some((kind, value)) = action {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let r = if kind == "power" {
+                crate::server::power(&cfg, &value).map(|_| format!("✔ {value}"))
+            } else {
+                crate::server::send_command(&cfg, &value)
+                    .map(|_| format!("✔ /{}", value.trim_start_matches('/')))
+            };
+            let _ = tx.send(r);
+            ctx.request_repaint();
+        });
+        sc.action_rx = Some(rx);
+    }
 }
 
 fn console(app: &mut App, ui: &mut Ui) {

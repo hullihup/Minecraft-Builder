@@ -14,7 +14,9 @@ use egui::{
 use std::collections::{HashMap, HashSet};
 
 pub const GRID: f32 = 16.0;
-const HEADER_H: f32 = 30.0;
+const HEADER_H: f32 = 34.0;
+/// Below this zoom blocks are drawn simplified.
+const LOD_ZOOM: f32 = 0.5;
 const ROW_H: f32 = 24.0;
 const PAD_X: f32 = 12.0;
 
@@ -24,8 +26,8 @@ pub fn snap_pos(p: Pos2) -> Pos2 {
 
 pub fn node_width(def: &BlockDef) -> f32 {
     match def.kind {
-        Kind::Value => 220.0,
-        _ => 260.0,
+        Kind::Value => 236.0,
+        _ => 280.0,
     }
 }
 
@@ -42,6 +44,9 @@ pub struct CanvasState {
     pub sizes: HashMap<NodeId, Vec2>,
     /// Pin positions of this frame: (node, pin, is_output) -> (scene pos, type).
     pub pins: HashMap<(NodeId, String, bool), (Pos2, PinType)>,
+    /// Pin positions relative to the node, from the last time it was drawn. Blocks
+    /// outside the screen are not drawn; their pins come from here.
+    pub pin_offsets: HashMap<NodeId, Vec<(String, bool, Vec2, PinType)>>,
     pub link_drag: Option<LinkDrag>,
     pub box_start: Option<Pos2>,
     /// Note being moved, with the nodes inside it.
@@ -60,6 +65,7 @@ impl Default for CanvasState {
         Self {
             sizes: HashMap::new(),
             pins: HashMap::new(),
+            pin_offsets: HashMap::new(),
             link_drag: None,
             box_start: None,
             note_drag: None,
@@ -93,6 +99,28 @@ enum NodeEvent {
     Delete(NodeId),
     Duplicate(NodeId),
     Disconnect(NodeId),
+    /// Open the menu editor for an "Open menu" block.
+    OpenMenu(NodeId),
+    /// Open the recipe editor.
+    OpenRecipe(NodeId),
+    /// Test mode for this event.
+    Trace(NodeId),
+    /// Open the disconnect screen editor.
+    OpenScreen(NodeId),
+    /// Connect a free flow output to this block's flow input.
+    ConnectFlow {
+        from: NodeId,
+        pin: String,
+        to: NodeId,
+    },
+    /// Open the commands window for a command block.
+    OpenCommand(NodeId),
+    /// Open the item search for a text input of a block.
+    PickItem {
+        node: NodeId,
+        key: String,
+        blocks: bool,
+    },
 }
 
 fn bezier(a: Pos2, b: Pos2, color: Color32, width: f32) -> Shape {
@@ -544,7 +572,94 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             (n.id, (title, outs))
         })
         .collect();
+    let show_desc = app.settings.block_descriptions;
+    let show_ids = app.settings.block_ids;
+    let show_types = app.settings.pin_types;
+    // Command blocks show how the command is typed.
+    let cmd_usage: HashMap<NodeId, String> = app.project.workspaces[ws_idx]
+        .nodes
+        .iter()
+        .filter(|n| n.kind == "ev_command")
+        .filter_map(|n| app.project.node_command(n).map(|c| (n.id, c.usage())))
+        .collect();
+    // Menu blocks show a small preview of the chest: (rows, [(slot, item, model, amount, texture)]).
+    let menu_raw: Vec<(NodeId, usize, Vec<crate::ui::menu_editor::MenuItem>)> =
+        app.project.workspaces[ws_idx]
+            .nodes
+            .iter()
+            .filter_map(|n| {
+                let def = blocks::get(&n.kind)?;
+                let f = def
+                    .fields
+                    .iter()
+                    .find(|f| matches!(f.kind, blocks::FieldKind::Menu))?;
+                let text = n.values.get(f.id).map(|s| s.as_str()).unwrap_or(f.default);
+                Some((
+                    n.id,
+                    crate::ui::menu_editor::rows_of(&n.values),
+                    crate::ui::menu_editor::parse(text),
+                ))
+            })
+            .collect();
+    let mut menu_prev: HashMap<
+        NodeId,
+        (
+            usize,
+            Vec<(usize, String, String, u32, Option<egui::TextureId>)>,
+        ),
+    > = HashMap::new();
+    for (nid, rows, items) in menu_raw {
+        let v = items
+            .into_iter()
+            .map(|it| {
+                let tex = app.item_texture(&ctx, &it.item, &it.model);
+                (it.slot, it.item, it.model, it.amount, tex)
+            })
+            .collect();
+        menu_prev.insert(nid, (rows, v));
+    }
+    // Recipe blocks show their grid and result: (kind, [9 textures/ids], result).
+    type Cell = (String, Option<egui::TextureId>);
+    let recipe_raw: Vec<(NodeId, String, crate::recipe::Recipe)> = app.project.workspaces[ws_idx]
+        .nodes
+        .iter()
+        .filter(|n| n.kind == "recipe")
+        .map(|n| {
+            let d = crate::recipe::from_node(n);
+            (n.id, d.rtype, d.recipe)
+        })
+        .collect();
+    let mut recipe_prev: HashMap<NodeId, (String, Vec<Cell>, Cell, u32)> = HashMap::new();
+    for (nid, rtype, r) in recipe_raw {
+        let cells: Vec<Cell> = r
+            .grid
+            .iter()
+            .map(|g| {
+                let tex = if g.is_empty() {
+                    None
+                } else {
+                    app.item_texture(&ctx, g, "")
+                };
+                (g.clone(), tex)
+            })
+            .collect();
+        let res_tex = if r.result.is_empty() {
+            None
+        } else {
+            app.item_texture(&ctx, &r.result, &r.model)
+        };
+        let res_id = if r.model.is_empty() {
+            r.result.clone()
+        } else {
+            r.model.clone()
+        };
+        recipe_prev.insert(nid, (rtype, cells, (res_id, res_tex), r.amount));
+    }
+    let free_outputs = app.free_flow_outputs();
+    let lit = crate::ui::trace::lit(app, ctx.input(|i| i.time));
     let mut new_sizes = HashMap::new();
+    // Visible part of the scene (with a margin for shadows and pins).
+    let visible = (to_scene * rect).expand(120.0);
     for idx in order {
         let node = &mut app.project.workspaces[ws_idx].nodes[idx];
         let Some(def) = blocks::get(&node.kind) else {
@@ -585,6 +700,109 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             .unwrap_or(vec2(width, 80.0));
         let node_rect_prev = Rect::from_min_size(pos, prev_size);
 
+        // Outside the screen: skip all drawing and widgets, keep pins and size.
+        if !selected
+            && app.canvas.sizes.contains_key(&node.id)
+            && !visible.intersects(node_rect_prev)
+        {
+            if let Some(offs) = app.canvas.pin_offsets.get(&node.id) {
+                for (pin, out, off, ty) in offs {
+                    app.canvas
+                        .pins
+                        .insert((node.id, pin.clone(), *out), (pos + *off, *ty));
+                }
+                new_sizes.insert(node.id, prev_size);
+                continue;
+            }
+        }
+        // Far zoomed out: a simple box (header, title, pins) instead of all fields –
+        // the text would be unreadable anyway and drawing it costs most of the frame.
+        if view.zoom < LOD_ZOOM && !selected && app.canvas.sizes.contains_key(&node.id) {
+            if let Some(offs) = app.canvas.pin_offsets.get(&node.id) {
+                let r = node_rect_prev;
+                let cat = def.cat.color();
+                let hrect = Rect::from_min_size(r.min, vec2(r.width(), HEADER_H));
+                let problem = node_problems.get(&node.id);
+                let border = if lit.contains_key(&node.id) {
+                    Stroke::new(3.0, theme::GREEN)
+                } else if let Some((true, _)) = problem {
+                    Stroke::new(3.0, theme::RED)
+                } else if let Some((false, _)) = problem {
+                    Stroke::new(2.0, theme::YELLOW.gamma_multiply(0.8))
+                } else {
+                    Stroke::new(1.0, theme::NODE_BORDER)
+                };
+                let p = sui.painter();
+                p.rect_filled(r, CornerRadius::same(8), theme::NODE_BG);
+                p.rect_filled(
+                    hrect,
+                    CornerRadius {
+                        nw: 8,
+                        ne: 8,
+                        sw: 0,
+                        se: 0,
+                    },
+                    blend(theme::NODE_HEADER, cat, 0.35),
+                );
+                p.rect_filled(
+                    Rect::from_min_max(hrect.left_top(), pos2(hrect.left() + 6.0, hrect.bottom())),
+                    CornerRadius {
+                        nw: 8,
+                        ne: 0,
+                        sw: 0,
+                        se: 0,
+                    },
+                    cat,
+                );
+                if view.zoom >= 0.3 {
+                    let name = match cmd_info.get(&node.id) {
+                        Some((title, _)) => title.clone(),
+                        None => tl(def.name).to_string(),
+                    };
+                    p.text(
+                        hrect.left_center() + vec2(14.0, 0.0),
+                        egui::Align2::LEFT_CENTER,
+                        name,
+                        FontId::proportional(20.0),
+                        theme::TEXT,
+                    );
+                }
+                p.rect_stroke(r, CornerRadius::same(8), border, StrokeKind::Inside);
+                for (pin, out, off, ty) in offs {
+                    let pp = pos + *off;
+                    p.circle_filled(
+                        pp,
+                        7.0,
+                        if *ty == PinType::Exec {
+                            theme::GREEN
+                        } else {
+                            ty.color()
+                        },
+                    );
+                    app.canvas
+                        .pins
+                        .insert((node.id, pin.clone(), *out), (pp, *ty));
+                }
+                let body = sui.interact(r, Id::unique(("node", node.id)), Sense::click_and_drag());
+                if body.clicked() || body.drag_started() {
+                    let add = ctx.input(|i| i.modifiers.command || i.modifiers.shift);
+                    events.push(NodeEvent::Select { id: node.id, add });
+                }
+                if body.dragged_by(egui::PointerButton::Primary) {
+                    events.push(NodeEvent::Drag {
+                        id: node.id,
+                        delta: body.drag_delta(),
+                    });
+                }
+                if body.drag_stopped() {
+                    events.push(NodeEvent::DragStop);
+                }
+                new_sizes.insert(node.id, prev_size);
+                continue;
+            }
+        }
+        let mut my_offsets: Vec<(String, bool, Vec2, PinType)> = vec![];
+
         // Body interaction is registered first so widgets inside win.
         let body = sui.interact(
             node_rect_prev,
@@ -608,6 +826,14 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         }
         let nid = node.id;
         body.context_menu(|ui| {
+            if def.kind == Kind::Event
+                && ui
+                    .button(t("▶ Ablauf ausprobieren", "▶ Try out the flow"))
+                    .clicked()
+            {
+                events.push(NodeEvent::Trace(nid));
+                ui.close();
+            }
             if ui.button(t("Duplizieren", "Duplicate")).clicked() {
                 events.push(NodeEvent::Duplicate(nid));
                 ui.close();
@@ -663,41 +889,63 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 .get(&nid)
                 .map(|c| c.0.clone())
                 .unwrap_or_else(|| tl(def.name).to_string());
-            crate::ui::icons::paint(
-                p,
-                Rect::from_center_size(
-                    hrect.left_center() + vec2(PAD_X + 7.0, 0.0),
-                    vec2(15.0, 15.0),
-                ),
-                def.cat.icon_kind(),
+            // Icon on a tinted chip.
+            let chip = Rect::from_center_size(
+                hrect.left_center() + vec2(PAD_X + 11.0, 0.0),
+                vec2(22.0, 22.0),
+            );
+            p.rect_filled(chip, 6.0, cat.gamma_multiply(0.20));
+            crate::ui::icons::paint(p, chip.shrink(4.0), def.cat.icon_kind(), cat);
+            // Kind badge (EVENT / ACTION / ...) and optional block number on the right.
+            let mut right = hrect.right() - PAD_X - 22.0;
+            let badge = p.layout_no_wrap(
+                tl(blocks::kind_label(def.kind)).to_uppercase(),
+                FontId::proportional(9.0),
+                cat.gamma_multiply(0.9),
+            );
+            right -= badge.size().x;
+            p.galley(
+                pos2(right, hrect.center().y - badge.size().y / 2.0),
+                badge,
                 cat,
             );
+            if show_ids {
+                let idg = p.layout_no_wrap(
+                    format!("#{}", node.id),
+                    FontId::proportional(9.5),
+                    theme::TEXT_WEAK,
+                );
+                right -= idg.size().x + 6.0;
+                p.galley(
+                    pos2(right, hrect.center().y - idg.size().y / 2.0),
+                    idg,
+                    theme::TEXT_WEAK,
+                );
+            }
+            let title_x = PAD_X + 30.0;
+            let max_title = (right - hrect.left() - title_x - 8.0).max(60.0);
             let title_galley =
                 p.layout_no_wrap(title_text.clone(), FontId::proportional(13.5), theme::TEXT);
-            let max_title = width - 2.0 * PAD_X - 60.0;
-            let title_pos = hrect.left_center() + vec2(PAD_X + 22.0, -title_galley.size().y / 2.0);
             if title_galley.size().x > max_title {
-                let g = p.layout(
+                let mut job = egui::text::LayoutJob::simple_singleline(
                     title_text.clone(),
-                    FontId::proportional(12.0),
+                    FontId::proportional(12.5),
                     theme::TEXT,
-                    max_title,
                 );
+                job.wrap = egui::text::TextWrapping::truncate_at_width(max_title);
+                let g = nui.fonts_mut(|f| f.layout_job(job));
                 p.galley(
-                    hrect.left_center() + vec2(PAD_X + 22.0, -g.size().y / 2.0),
+                    hrect.left_center() + vec2(title_x, -g.size().y / 2.0),
                     g,
                     theme::TEXT,
                 );
             } else {
-                p.galley(title_pos, title_galley, theme::TEXT);
+                p.galley(
+                    hrect.left_center() + vec2(title_x, -title_galley.size().y / 2.0),
+                    title_galley,
+                    theme::TEXT,
+                );
             }
-            p.text(
-                hrect.right_center() - vec2(PAD_X + 24.0, 0.0),
-                egui::Align2::RIGHT_CENTER,
-                format!("#{}", node.id),
-                FontId::proportional(10.5),
-                theme::TEXT_WEAK,
-            );
         }
         // "⋯" menu button (left click).
         {
@@ -722,6 +970,14 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             );
             let mresp = mresp.on_hover_text(t("Block-Menü", "Block menu"));
             egui::Popup::menu(&mresp).show(|ui| {
+                if def.kind == Kind::Event
+                    && ui
+                        .button(t("▶ Ablauf ausprobieren", "▶ Try out the flow"))
+                        .clicked()
+                {
+                    events.push(NodeEvent::Trace(nid));
+                    ui.close();
+                }
                 if ui.button(t("Duplizieren", "Duplicate")).clicked() {
                     events.push(NodeEvent::Duplicate(nid));
                     ui.close();
@@ -760,16 +1016,410 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 pos2(hrect.right(), hrect.center().y),
             ));
         }
+        // What the block does, in one sentence (full text on hover).
+        let mut desc_rect: Option<Rect> = None;
+        if show_desc || cmd_usage.contains_key(&nid) {
+            let full = tl(def.desc);
+            let usage = cmd_usage.get(&nid);
+            let short = match usage {
+                Some(u) => u.clone(),
+                None => short_desc(full),
+            };
+            let r = egui::Frame::new()
+                .inner_margin(egui::Margin {
+                    left: PAD_X as i8,
+                    right: PAD_X as i8,
+                    top: 5,
+                    bottom: 5,
+                })
+                .show(&mut nui, |ui| {
+                    ui.set_width(width - 2.0 * PAD_X);
+                    let mut txt = egui::RichText::new(short)
+                        .size(10.5)
+                        .color(if usage.is_some() {
+                            theme::GREEN.gamma_multiply(0.85)
+                        } else {
+                            theme::TEXT_WEAK
+                        });
+                    if usage.is_some() {
+                        txt = txt.monospace();
+                    }
+                    ui.add(egui::Label::new(txt).wrap().selectable(false))
+                        .on_hover_ui(|ui| {
+                            ui.set_max_width(320.0);
+                            ui.label(egui::RichText::new(tl(def.name)).strong());
+                            ui.label(full);
+                        });
+                })
+                .response
+                .rect;
+            desc_rect = Some(Rect::from_min_max(
+                pos2(hrect.left(), r.top()),
+                pos2(hrect.right(), r.bottom()),
+            ));
+        }
         nui.add_space(6.0);
 
         let inner_w = width - 2.0 * PAD_X;
-        let label_w = 86.0;
+        let label_w = 92.0;
         let edit_w = inner_w - label_w - 8.0;
         let mut changed = false;
+
+        // Problems written right on the block, with a fix for missing flow.
+        let flow_missing =
+            def.has_exec_in() && !connected.contains(&(nid, "in".to_string(), false));
+        if let Some((_, msgs)) = node_problems.get(&nid) {
+            for m in msgs {
+                let is_err = !m.contains("nie ausgeführt") && !m.starts_with("Es gibt kein Menü");
+                let col = if is_err { theme::RED } else { theme::YELLOW };
+                let text = if m.contains("nie ausgeführt") {
+                    t(
+                        "Läuft nie: Zieh den grünen Pfeil ▷ von einem Event oder dem Block davor zum grünen Pfeil links an diesem Block.",
+                        "Never runs: drag the green arrow ▷ from an event or the block before to the green arrow on the left of this block.",
+                    )
+                    .to_string()
+                } else {
+                    m.clone()
+                };
+                egui::Frame::new()
+                    .fill(col.gamma_multiply(0.12))
+                    .inner_margin(egui::Margin::symmetric(PAD_X as i8, 4))
+                    .show(&mut nui, |ui| {
+                        ui.set_width(width - 2.0 * PAD_X);
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(text).size(10.5).color(col))
+                                .wrap()
+                                .selectable(false),
+                        );
+                    });
+            }
+            nui.add_space(2.0);
+        }
+        if flow_missing && def.kind != Kind::Event {
+            let cands: Vec<&(NodeId, String, String)> =
+                free_outputs.iter().filter(|c| c.0 != nid).collect();
+            if !cands.is_empty() {
+                let r = row(&mut nui, |ui| {
+                    let resp = wide_button(
+                        ui,
+                        crate::ui::icons::Icon::Bolt,
+                        t("Mit Ablauf verbinden ▾", "Connect to flow ▾"),
+                        inner_w,
+                    );
+                    egui::Popup::menu(&resp).show(|ui| {
+                        ui.label(
+                            egui::RichText::new(t(
+                                "Wonach soll dieser Block laufen?",
+                                "After what should this block run?",
+                            ))
+                            .size(11.0)
+                            .color(theme::TEXT_WEAK),
+                        );
+                        for (from, pin, label) in &cands {
+                            if ui.button(label.as_str()).clicked() {
+                                events.push(NodeEvent::ConnectFlow {
+                                    from: *from,
+                                    pin: pin.clone(),
+                                    to: nid,
+                                });
+                                ui.close();
+                            }
+                        }
+                    });
+                });
+                let _ = r;
+            }
+        }
 
         // Fields
         for f in def.fields.iter().filter(|f| !f.advanced) {
             let multiline = matches!(f.kind, blocks::FieldKind::Multiline);
+            if matches!(f.kind, blocks::FieldKind::Screen) {
+                let text = node
+                    .values
+                    .get(f.id)
+                    .cloned()
+                    .unwrap_or_else(|| f.default.to_string());
+                let cat = node
+                    .values
+                    .get("category")
+                    .cloned()
+                    .unwrap_or_else(|| "Hacking".into());
+                egui::Frame::new()
+                    .inner_margin(egui::Margin::symmetric(PAD_X as i8, 2))
+                    .show(&mut nui, |ui| {
+                        let (r, resp) =
+                            ui.allocate_exact_size(vec2(inner_w, 112.0), Sense::click());
+                        crate::ui::screen_editor::draw_screen(
+                            ui,
+                            r,
+                            &crate::ui::screen_editor::preview_text(&text, &cat),
+                            0.52,
+                        );
+                        if resp.hovered() {
+                            ui.painter().rect_stroke(
+                                r,
+                                2.0,
+                                Stroke::new(1.5, theme::ACCENT),
+                                StrokeKind::Outside,
+                            );
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        if resp.clicked() {
+                            events.push(NodeEvent::OpenScreen(nid));
+                        }
+                    });
+                nui.add_space(4.0);
+                row(&mut nui, |ui| {
+                    if wide_button(
+                        ui,
+                        crate::ui::icons::Icon::Edit,
+                        t("Bildschirm bearbeiten", "Edit screen"),
+                        inner_w,
+                    )
+                    .clicked()
+                    {
+                        events.push(NodeEvent::OpenScreen(nid));
+                    }
+                });
+                nui.add_space(2.0);
+                continue;
+            }
+            if matches!(f.kind, blocks::FieldKind::Recipe) {
+                let (rtype, cells, result, amount) =
+                    recipe_prev.get(&nid).cloned().unwrap_or_default();
+                let single = crate::recipe::single_input(&rtype);
+                let cell = 30.0_f32;
+                egui::Frame::new()
+                    .inner_margin(egui::Margin::symmetric(PAD_X as i8, 2))
+                    .show(&mut nui, |ui| {
+                        let (r, resp) =
+                            ui.allocate_exact_size(vec2(inner_w, cell * 3.0 + 8.0), Sense::click());
+                        let p = ui.painter();
+                        p.rect_filled(r, 4.0, Color32::from_rgb(0xC6, 0xC6, 0xC6));
+                        let g0 = r.min + vec2(8.0, 4.0);
+                        let slot = |p: &egui::Painter, sr: Rect| {
+                            p.rect_filled(sr.shrink(1.0), 0.0, Color32::from_rgb(0x8B, 0x8B, 0x8B));
+                            p.line_segment(
+                                [sr.left_top(), sr.right_top()],
+                                Stroke::new(1.0, Color32::from_rgb(0x37, 0x37, 0x37)),
+                            );
+                            p.line_segment(
+                                [sr.left_top(), sr.left_bottom()],
+                                Stroke::new(1.0, Color32::from_rgb(0x37, 0x37, 0x37)),
+                            );
+                        };
+                        let draw =
+                            |p: &egui::Painter, sr: Rect, c: &(String, Option<egui::TextureId>)| {
+                                if c.0.is_empty() {
+                                    return;
+                                }
+                                match c.1 {
+                                    Some(t) => {
+                                        p.image(
+                                            t,
+                                            sr.shrink(3.0),
+                                            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                                            Color32::WHITE,
+                                        );
+                                    }
+                                    None => {
+                                        crate::items::paint_placeholder(p, sr.shrink(4.0), &c.0)
+                                    }
+                                }
+                            };
+                        for i in 0..9 {
+                            if single && i != crate::recipe::CENTER {
+                                continue;
+                            }
+                            let sr = Rect::from_min_size(
+                                g0 + vec2((i % 3) as f32 * cell, (i / 3) as f32 * cell),
+                                vec2(cell, cell),
+                            );
+                            slot(p, sr);
+                            if let Some(c) = cells.get(i) {
+                                draw(p, sr, c);
+                            }
+                        }
+                        let rr = Rect::from_center_size(
+                            pos2(r.right() - 34.0, r.center().y),
+                            vec2(cell + 8.0, cell + 8.0),
+                        );
+                        let ax = g0.x + cell * 3.0 + 10.0;
+                        let col = Color32::from_rgb(0x8B, 0x8B, 0x8B);
+                        p.rect_filled(
+                            Rect::from_min_max(
+                                pos2(ax, r.center().y - 4.0),
+                                pos2(rr.left() - 18.0, r.center().y + 4.0),
+                            ),
+                            0.0,
+                            col,
+                        );
+                        p.add(Shape::convex_polygon(
+                            vec![
+                                pos2(rr.left() - 20.0, r.center().y - 10.0),
+                                pos2(rr.left() - 6.0, r.center().y),
+                                pos2(rr.left() - 20.0, r.center().y + 10.0),
+                            ],
+                            col,
+                            Stroke::NONE,
+                        ));
+                        slot(p, rr);
+                        draw(p, rr, &result);
+                        if amount > 1 {
+                            p.text(
+                                rr.right_bottom() - vec2(3.0, 2.0),
+                                egui::Align2::RIGHT_BOTTOM,
+                                amount.to_string(),
+                                FontId::monospace(10.0),
+                                Color32::WHITE,
+                            );
+                        }
+                        if resp.hovered() {
+                            p.rect_stroke(
+                                r,
+                                4.0,
+                                Stroke::new(1.5, theme::ACCENT),
+                                StrokeKind::Outside,
+                            );
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        if resp
+                            .on_hover_text(t(
+                                "Klicken, um das Rezept zu bearbeiten",
+                                "Click to edit the recipe",
+                            ))
+                            .clicked()
+                        {
+                            events.push(NodeEvent::OpenRecipe(nid));
+                        }
+                    });
+                nui.add_space(4.0);
+                row(&mut nui, |ui| {
+                    if wide_button(
+                        ui,
+                        crate::ui::icons::Icon::Grid,
+                        t("Rezept bearbeiten", "Edit recipe"),
+                        inner_w,
+                    )
+                    .clicked()
+                    {
+                        events.push(NodeEvent::OpenRecipe(nid));
+                    }
+                });
+                nui.add_space(2.0);
+                continue;
+            }
+            if matches!(f.kind, blocks::FieldKind::Menu) {
+                // Mini chest + button that opens the menu editor.
+                let (rows, items) = menu_prev.get(&nid).cloned().unwrap_or((3, vec![]));
+                let cell = (inner_w / 9.0).floor();
+                let grid = vec2(cell * 9.0, cell * rows as f32);
+                let r = egui::Frame::new()
+                    .inner_margin(egui::Margin::symmetric(PAD_X as i8, 2))
+                    .show(&mut nui, |ui| {
+                        let (gr, resp) = ui.allocate_exact_size(grid, Sense::click());
+                        let p = ui.painter();
+                        p.rect_filled(gr.expand(3.0), 4.0, Color32::from_rgb(0xC6, 0xC6, 0xC6));
+                        for i in 0..rows * 9 {
+                            let sr = Rect::from_min_size(
+                                gr.min + vec2((i % 9) as f32 * cell, (i / 9) as f32 * cell),
+                                vec2(cell, cell),
+                            )
+                            .shrink(1.0);
+                            p.rect_filled(sr, 0.0, Color32::from_rgb(0x8B, 0x8B, 0x8B));
+                            p.line_segment(
+                                [sr.left_top(), sr.right_top()],
+                                Stroke::new(1.0, Color32::from_rgb(0x37, 0x37, 0x37)),
+                            );
+                            p.line_segment(
+                                [sr.left_top(), sr.left_bottom()],
+                                Stroke::new(1.0, Color32::from_rgb(0x37, 0x37, 0x37)),
+                            );
+                        }
+                        for (slot, item, model, amount, tex) in &items {
+                            if *slot >= rows * 9 {
+                                continue;
+                            }
+                            let sr = Rect::from_min_size(
+                                gr.min + vec2((*slot % 9) as f32 * cell, (*slot / 9) as f32 * cell),
+                                vec2(cell, cell),
+                            )
+                            .shrink(3.5);
+                            if item == "minecraft:air" {
+                                let st = Stroke::new(2.0, Color32::from_rgb(0xD0, 0x30, 0x30));
+                                p.line_segment([sr.left_top(), sr.right_bottom()], st);
+                                p.line_segment([sr.right_top(), sr.left_bottom()], st);
+                                continue;
+                            }
+                            match tex {
+                                Some(t) => {
+                                    p.image(
+                                        *t,
+                                        sr,
+                                        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                                        Color32::WHITE,
+                                    );
+                                }
+                                None => crate::items::paint_placeholder(
+                                    p,
+                                    sr,
+                                    if model.is_empty() { item } else { model },
+                                ),
+                            }
+                            if *amount > 1 {
+                                p.text(
+                                    sr.right_bottom() + vec2(2.0, 3.0),
+                                    egui::Align2::RIGHT_BOTTOM,
+                                    amount.to_string(),
+                                    FontId::monospace(9.5),
+                                    Color32::WHITE,
+                                );
+                            }
+                        }
+                        if resp.hovered() {
+                            p.rect_stroke(
+                                gr.expand(3.0),
+                                4.0,
+                                Stroke::new(1.5, theme::ACCENT),
+                                StrokeKind::Outside,
+                            );
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        if resp
+                            .on_hover_text(t(
+                                "Klicken, um das Menü zu bearbeiten",
+                                "Click to edit the menu",
+                            ))
+                            .clicked()
+                        {
+                            events.push(NodeEvent::OpenMenu(nid));
+                        }
+                    })
+                    .response
+                    .rect;
+                let _ = r;
+                nui.add_space(4.0);
+                row(&mut nui, |ui| {
+                    if wide_button(
+                        ui,
+                        crate::ui::icons::Icon::Chest,
+                        &format!(
+                            "{} · {} {}",
+                            t("Menü bearbeiten", "Edit menu"),
+                            items.len(),
+                            t("Items", "items")
+                        ),
+                        inner_w,
+                    )
+                    .clicked()
+                    {
+                        events.push(NodeEvent::OpenMenu(nid));
+                    }
+                });
+                nui.add_space(2.0);
+                continue;
+            }
             if multiline {
                 row(&mut nui, |ui| {
                     ui.label(
@@ -809,29 +1459,109 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             if !adv_open && hidden.iter().any(|h| h.id == pin.id) {
                 continue;
             }
-            if node.kind.starts_with("data_")
+            if def.field("scope").is_some()
                 && pin.id == "player"
                 && node.values.get("scope").map(|s| s.as_str()) == Some("global")
             {
                 continue;
             }
             let is_conn = connected.contains(&(nid, pin.id.to_string(), false));
+            // Item / block ids get a search button.
+            let searchable =
+                !is_conn && pin.ty == PinType::Text && matches!(&*pin.id, "item" | "block");
+            let is_sound = !is_conn && pin.ty == PinType::Text && &*pin.id == "sound";
             let r = row(&mut nui, |ui| {
                 row_label(
                     ui,
                     label_w,
                     egui::RichText::new(pin.label.text()).size(11.5),
-                );
-                if !is_conn && pin.ty.has_inline() {
+                )
+                .on_hover_ui(|ui| pin_tooltip(ui, def, pin, false, is_conn));
+                if is_conn {
+                    ui.label(
+                        egui::RichText::new(t("verbunden", "connected"))
+                            .size(10.5)
+                            .color(pin.ty.color().gamma_multiply(0.75)),
+                    );
+                } else if pin.ty.has_inline() {
                     changed |= widgets::pin_editor(
                         ui,
                         pin.ty,
                         &pin.id,
                         pin.default,
                         &mut node.values,
-                        edit_w,
+                        if searchable || is_sound {
+                            edit_w - 26.0
+                        } else {
+                            edit_w
+                        },
                         ("p", nid, pin.id.clone()),
                     );
+                    if is_sound {
+                        ui.menu_button("♪", |ui| {
+                            let pack = crate::resourcepack::known_sounds();
+                            if !pack.is_empty() {
+                                ui.label(
+                                    egui::RichText::new(t(
+                                        "Aus deinem Resourcepack",
+                                        "From your resource pack",
+                                    ))
+                                    .size(11.0)
+                                    .color(theme::TEXT_WEAK),
+                                );
+                                for s in &pack {
+                                    if ui.button(s).clicked() {
+                                        node.values.insert(pin.id.to_string(), s.clone());
+                                        ui.close();
+                                    }
+                                }
+                                ui.separator();
+                            }
+                            ui.label(
+                                egui::RichText::new(t("Beliebte Sounds", "Popular sounds"))
+                                    .size(11.0)
+                                    .color(theme::TEXT_WEAK),
+                            );
+                            for s in [
+                                "entity.experience_orb.pickup",
+                                "entity.player.levelup",
+                                "block.note_block.pling",
+                                "block.note_block.bass",
+                                "entity.villager.no",
+                                "entity.villager.yes",
+                                "entity.enderman.teleport",
+                                "block.anvil.land",
+                                "ui.button.click",
+                                "entity.firework_rocket.launch",
+                                "block.chest.open",
+                                "entity.ender_dragon.growl",
+                            ] {
+                                if ui.button(s).clicked() {
+                                    node.values.insert(pin.id.to_string(), s.to_string());
+                                    ui.close();
+                                }
+                            }
+                        });
+                    }
+                    if searchable
+                        && crate::ui::icons::icon_button(
+                            ui,
+                            crate::ui::icons::Icon::Search,
+                            20.0,
+                            if pin.id == "block" {
+                                t("Block suchen", "Search block")
+                            } else {
+                                t("Item suchen", "Search item")
+                            },
+                        )
+                        .clicked()
+                    {
+                        events.push(NodeEvent::PickItem {
+                            node: nid,
+                            key: pin.id.to_string(),
+                            blocks: pin.id == "block",
+                        });
+                    }
                 } else if !is_conn {
                     ui.label(
                         egui::RichText::new(t("automatisch", "automatic"))
@@ -900,7 +1630,17 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     if pin.ty == PinType::Exec {
                         txt = txt.color(theme::GREEN);
                     }
-                    ui.label(txt);
+                    ui.add(egui::Label::new(txt).selectable(false))
+                        .on_hover_ui(|ui| pin_tooltip(ui, def, pin, true, false));
+                    // Type tag, unless the label already says it.
+                    let ty_name = tl(pin.ty.label());
+                    if show_types && pin.ty != PinType::Exec && ty_name != pin.label.text() {
+                        ui.label(
+                            egui::RichText::new(ty_name)
+                                .size(9.5)
+                                .color(pin.ty.color().gamma_multiply(0.75)),
+                        );
+                    }
                 });
             });
             pin_list.push((
@@ -910,13 +1650,39 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 pos2(hrect.right(), r.center().y),
             ));
         }
+        if def.special == blocks::Special::Command {
+            nui.add_space(2.0);
+            row(&mut nui, |ui| {
+                if wide_button(
+                    ui,
+                    crate::ui::icons::Icon::Edit,
+                    t("Befehl bearbeiten", "Edit command"),
+                    inner_w,
+                )
+                .on_hover_text(t(
+                    "Name, Optionen und Rechte im Befehle-Fenster einstellen",
+                    "Set name, options and permissions in the commands window",
+                ))
+                .clicked()
+                {
+                    events.push(NodeEvent::OpenCommand(nid));
+                }
+            });
+        }
         nui.add_space(8.0);
         let node_rect = Rect::from_min_size(pos, vec2(width, nui.min_rect().height()));
         new_sizes.insert(nid, node_rect.size());
 
         // Background + border
         let problem = node_problems.get(&nid);
-        let border = if selected {
+        let border = if let Some(cur) = lit.get(&nid) {
+            let pulse = (ctx.input(|i| i.time) * 6.0).sin() as f32 * 0.5 + 0.5;
+            if *cur {
+                Stroke::new(3.0 + pulse * 1.5, theme::GREEN)
+            } else {
+                Stroke::new(2.0, theme::GREEN.gamma_multiply(0.7))
+            }
+        } else if selected {
             Stroke::new(2.0, theme::ACCENT)
         } else if let Some((true, _)) = problem {
             Stroke::new(1.5, theme::RED)
@@ -948,7 +1714,28 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             },
             blend(theme::NODE_HEADER, cat, 0.16),
         ));
-        // Colored line under the header in the category color.
+        // Colored strip on the left of the header.
+        shapes.push(Shape::rect_filled(
+            Rect::from_min_max(hrect.left_top(), pos2(hrect.left() + 4.0, hrect.bottom())),
+            CornerRadius {
+                nw: 8,
+                ne: 0,
+                sw: 0,
+                se: 0,
+            },
+            cat,
+        ));
+        if let Some(dr) = desc_rect {
+            shapes.push(Shape::rect_filled(
+                dr,
+                0.0,
+                blend(theme::NODE_BG, Color32::BLACK, 0.16),
+            ));
+            shapes.push(Shape::line_segment(
+                [dr.left_bottom(), dr.right_bottom()],
+                Stroke::new(1.0, theme::NODE_BORDER.gamma_multiply(0.6)),
+            ));
+        }
         shapes.push(Shape::line_segment(
             [hrect.left_bottom(), hrect.right_bottom()],
             Stroke::new(1.5, cat.gamma_multiply(0.55)),
@@ -1042,29 +1829,22 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 });
             }
             if pr.hovered() && app.canvas.link_drag.is_none() {
-                pr.on_hover_text(format!(
-                    "{} · {}{}",
-                    tl(ty.label()),
-                    if is_out {
-                        t("Ausgang", "Output")
-                    } else {
-                        t("Eingang", "Input")
-                    },
-                    if is_conn {
-                        t(
-                            " · Klick: verbinden · Rechtsklick: trennen",
-                            " · click: connect · right-click: disconnect",
-                        )
-                    } else {
-                        t(
-                            " · Klick oder Ziehen: verbinden",
-                            " · click or drag: connect",
-                        )
-                    }
-                ));
+                let dyn_outs = cmd_info.get(&nid).map(|c| &c.1);
+                let pd = if is_out {
+                    dyn_outs
+                        .and_then(|o| o.iter().find(|x| x.id == pin))
+                        .or_else(|| def.output(&pin))
+                } else {
+                    def.input(&pin)
+                };
+                if let Some(pd) = pd {
+                    pr.on_hover_ui(|ui| pin_tooltip(ui, def, pd, is_out, is_conn));
+                }
             }
+            my_offsets.push((pin.clone(), is_out, p - pos, ty));
             app.canvas.pins.insert((nid, pin, is_out), (p, ty));
         }
+        app.canvas.pin_offsets.insert(nid, my_offsets);
         let _ = changed;
     }
     app.canvas.sizes = new_sizes;
@@ -1127,6 +1907,13 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 .get(&(l.from.node, l.from.pin.clone(), true));
             let b = app.canvas.pins.get(&(l.to.node, l.to.pin.clone(), false));
             if let (Some((pa, ta)), Some((pb, _))) = (a, b) {
+                // Wires completely outside the screen are not drawn.
+                if !Rect::from_two_pos(*pa, *pb)
+                    .expand2(vec2(230.0, 20.0))
+                    .intersects(visible)
+                {
+                    continue;
+                }
                 let sel = app.canvas.selected_link.as_ref() == Some(l);
                 let hov = hovered_link.as_ref() == Some(l);
                 let hl = sel
@@ -1152,6 +1939,19 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     mid_of_selected = Some(bezier_point(a2, b2, 0.5));
                 }
                 shapes.push(bezier(a2, b2, col, if hl { w + 1.0 } else { w }));
+                // Moving dots show which way the flow runs.
+                if *ta == PinType::Exec && hl && app.settings.wire_flow {
+                    let time = ctx.input(|i| i.time) as f32;
+                    for k in 0..3 {
+                        let tt = (time * 0.55 + k as f32 / 3.0).fract();
+                        shapes.push(Shape::circle_filled(
+                            bezier_point(a2, b2, tt),
+                            2.8,
+                            Color32::from_rgb(0xE8, 0xFF, 0xEE),
+                        ));
+                    }
+                    ctx.request_repaint_after(std::time::Duration::from_millis(33));
+                }
             }
         }
         sui.painter().set(wires_slot, Shape::Vec(shapes));
@@ -1253,7 +2053,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     app.selection.clear();
                     app.selection.insert(id);
                 }
-                app.right_tab = crate::app::RightTab::Inspector;
+                if app.dock_of(crate::app::View::Inspector) == crate::app::Dock::Right {
+                    app.right_tab = crate::app::View::Inspector;
+                }
             }
             NodeEvent::Drag { id, delta } => {
                 let ids: Vec<NodeId> = if app.selection.contains(&id) {
@@ -1358,6 +2160,57 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     .links
                     .retain(|l| l.from.node != id && l.to.node != id);
             }
+            NodeEvent::OpenMenu(id) => {
+                app.selection.clear();
+                app.selection.insert(id);
+                app.menu_edit = Some(crate::ui::menu_editor::MenuEdit::new(ws_idx, id));
+            }
+            NodeEvent::ConnectFlow { from, pin, to } => {
+                connect(
+                    app.ws_mut(),
+                    PinRef { node: from, pin },
+                    PinRef {
+                        node: to,
+                        pin: "in".into(),
+                    },
+                    true,
+                );
+            }
+            NodeEvent::OpenScreen(id) => {
+                app.selection.clear();
+                app.selection.insert(id);
+                app.screen_edit = Some((ws_idx, id));
+            }
+            NodeEvent::Trace(id) => {
+                let now = ctx.input(|i| i.time);
+                crate::ui::trace::start(app, ws_idx, Some(id), now);
+            }
+            NodeEvent::OpenRecipe(id) => {
+                app.selection.clear();
+                app.selection.insert(id);
+                crate::ui::recipe_editor::open(app, ws_idx, id);
+            }
+            NodeEvent::OpenCommand(id) => {
+                let cmd = app.project.workspaces[ws_idx]
+                    .node(id)
+                    .and_then(|n| app.project.node_command(n))
+                    .map(|c| c.id);
+                app.open_commands(cmd);
+            }
+            NodeEvent::PickItem { node, key, blocks } => {
+                app.item_picker = Some(crate::ui::menu_editor::ItemPicker::new(
+                    crate::ui::menu_editor::PickTarget::NodeValue {
+                        ws: ws_idx,
+                        node,
+                        key,
+                    },
+                    if blocks {
+                        crate::ui::menu_editor::PickTab::Blocks
+                    } else {
+                        crate::ui::menu_editor::PickTab::All
+                    },
+                ));
+            }
         }
     }
 
@@ -1452,7 +2305,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     // Drop from the block library.
     if let Some(kind) = bg_resp.dnd_release_payload::<String>() {
         if let Some(p) = pointer {
-            app.add_node(&kind, to_scene * p);
+            app.add_node_auto(&kind, to_scene * p);
         }
     }
 
@@ -1497,14 +2350,169 @@ fn row(ui: &mut Ui, add: impl FnOnce(&mut Ui)) -> Rect {
 }
 
 /// Left-aligned, truncated label of fixed width.
-fn row_label(ui: &mut Ui, w: f32, text: egui::RichText) {
+fn row_label(ui: &mut Ui, w: f32, text: egui::RichText) -> egui::Response {
     ui.allocate_ui_with_layout(
         vec2(w, ROW_H),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
             ui.set_width(w);
-            ui.add(egui::Label::new(text).truncate());
+            ui.add(egui::Label::new(text).truncate().selectable(false))
         },
+    )
+    .inner
+}
+
+/// First sentence of a block description, shortened to fit on the block.
+fn short_desc(full: &str) -> String {
+    // End of the first sentence: ". " followed by a capital letter, but not after
+    // abbreviations like "z. B." or "e.g.".
+    let chars: Vec<(usize, char)> = full.char_indices().collect();
+    let mut end = full.len();
+    for w in 0..chars.len().saturating_sub(2) {
+        let (i, c) = chars[w];
+        if c != '.' || chars[w + 1].1 != ' ' {
+            continue;
+        }
+        let next = chars[w + 2].1;
+        let word_len = full[..i]
+            .chars()
+            .rev()
+            .take_while(|ch| ch.is_alphanumeric())
+            .count();
+        if word_len > 2 && (next.is_uppercase() || next == '„' || next == '“') {
+            end = i + 1;
+            break;
+        }
+    }
+    let first = &full[..end];
+    let max = 96;
+    if first.chars().count() > max {
+        let cut: String = first.chars().take(max - 1).collect();
+        let cut = cut.trim_end().to_string();
+        format!("{cut}…")
+    } else {
+        first.to_string()
+    }
+}
+
+/// Full-width button inside a block (e.g. "Edit menu").
+fn wide_button(ui: &mut Ui, icon: crate::ui::icons::Icon, text: &str, w: f32) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(vec2(w, 22.0), Sense::click());
+    let hov = resp.hovered();
+    ui.painter().rect(
+        r,
+        5.0,
+        if hov {
+            theme::ACCENT_BG
+        } else {
+            Color32::from_rgb(0x24, 0x26, 0x2A)
+        },
+        Stroke::new(
+            1.0,
+            if hov {
+                theme::ACCENT
+            } else {
+                Color32::from_rgb(0x44, 0x47, 0x4E)
+            },
+        ),
+        StrokeKind::Inside,
+    );
+    let col = if hov { theme::ACCENT } else { theme::TEXT };
+    let g = ui
+        .painter()
+        .layout_no_wrap(text.to_string(), FontId::proportional(11.5), col);
+    let total = g.size().x + 18.0;
+    let x = r.center().x - total / 2.0;
+    crate::ui::icons::paint(
+        ui.painter(),
+        Rect::from_center_size(pos2(x + 6.0, r.center().y), vec2(12.0, 12.0)),
+        icon,
+        col,
+    );
+    ui.painter()
+        .galley(pos2(x + 18.0, r.center().y - g.size().y / 2.0), g, col);
+    if hov {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp
+}
+
+/// Explains a socket: what it is, what it does and what fits into it.
+fn pin_tooltip(ui: &mut Ui, def: &BlockDef, pin: &blocks::PinDef, is_out: bool, connected: bool) {
+    ui.set_max_width(300.0);
+    ui.spacing_mut().item_spacing.y = 4.0;
+    ui.horizontal(|ui| {
+        let (r, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
+        if pin.ty == PinType::Exec {
+            ui.painter()
+                .add(exec_triangle(r.center(), true, theme::GREEN));
+        } else {
+            ui.painter().circle_filled(r.center(), 5.0, pin.ty.color());
+        }
+        let name = if pin.label.text().is_empty() {
+            tl(pin.ty.label())
+        } else {
+            pin.label.text()
+        };
+        ui.label(egui::RichText::new(name).strong());
+        ui.label(
+            egui::RichText::new(format!(
+                "{} · {}",
+                tl(pin.ty.label()),
+                if is_out {
+                    t("Ausgang", "Output")
+                } else {
+                    t("Eingang", "Input")
+                }
+            ))
+            .size(11.0)
+            .color(pin.ty.color()),
+        );
+    });
+    ui.label(blocks::pin_help(def, pin, is_out));
+    if !is_out && pin.ty.has_inline() && !pin.default.is_empty() {
+        ui.label(
+            egui::RichText::new(format!("{} {}", t("Standard:", "Default:"), pin.default))
+                .size(11.0)
+                .color(theme::TEXT_WEAK),
+        );
+    }
+    let fits = blocks::accepts(pin.ty, is_out);
+    if !fits.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.label(
+                egui::RichText::new(if is_out {
+                    t("Passt auch in:", "Also fits into:")
+                } else {
+                    t("Nimmt auch:", "Also takes:")
+                })
+                .size(11.0)
+                .color(theme::TEXT_WEAK),
+            );
+            for f in fits {
+                ui.label(
+                    egui::RichText::new(tl(f.label()))
+                        .size(11.0)
+                        .color(f.color()),
+                );
+            }
+        });
+    }
+    ui.label(
+        egui::RichText::new(if connected {
+            t(
+                "Klick: weiteres Kabel · Rechtsklick auf den Punkt: trennen",
+                "Click: another wire · right-click the dot: disconnect",
+            )
+        } else {
+            t(
+                "Punkt anklicken oder ziehen, um zu verbinden",
+                "Click or drag the dot to connect",
+            )
+        })
+        .size(10.5)
+        .color(theme::TEXT_WEAK),
     );
 }
 
@@ -1704,6 +2712,22 @@ fn toolbar(app: &mut App, ui: &mut Ui, rect: Rect, to_scene: TSTransform) {
                     });
                     app.selected_note = Some(id);
                     app.selection.clear();
+                }
+                if crate::ui::icons::styled_button(
+                    ui,
+                    Some(crate::ui::icons::Icon::Play),
+                    t("Testen", "Test"),
+                    Some((Color32::from_rgb(0x1C, 0x6E, 0x3A), Color32::WHITE)),
+                )
+                .on_hover_text(t(
+                    "Zeigt Schritt für Schritt, welche Blöcke beim ausgewählten (oder ersten) Event laufen",
+                    "Shows step by step which blocks run for the selected (or first) event",
+                ))
+                .clicked()
+                {
+                    let now = ui.ctx().input(|i| i.time);
+                    let ws = app.active_ws;
+                    crate::ui::trace::start(app, ws, None, now);
                 }
                 let snap = app.settings.snap;
                 let snap_btn = tool_icon(ui, crate::ui::icons::Icon::Grid, snap)

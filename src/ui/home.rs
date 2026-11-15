@@ -212,6 +212,10 @@ fn left_column(app: &mut App, ui: &mut Ui) {
             .color(theme::TEXT_WEAK),
         );
         ui.horizontal(|ui| {
+            if crate::ui::panels::settings_gear(ui, 34.0).clicked() {
+                crate::ui::settings::open(app, crate::ui::settings::Tab::General);
+            }
+            ui.add_space(4.0);
             if ui
                 .selectable_label(crate::i18n::is_german(), "Deutsch")
                 .clicked()
@@ -525,7 +529,7 @@ fn projects(app: &mut App, ui: &mut Ui) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(16.0, 16.0);
         for s in Starter::ALL {
-            let (r, resp) = ui.allocate_exact_size(vec2(230.0, 96.0), Sense::click());
+            let (r, resp) = ui.allocate_exact_size(vec2(250.0, 104.0), Sense::click());
             let hov = resp.hovered();
             ui.painter().rect(
                 r,
@@ -545,8 +549,12 @@ fn projects(app: &mut App, ui: &mut Ui) {
                 ),
                 StrokeKind::Inside,
             );
+            let col = s.color();
+            let ir = egui::Rect::from_min_size(r.min + vec2(12.0, 12.0), vec2(28.0, 28.0));
+            ui.painter().rect_filled(ir, 6.0, col.gamma_multiply(0.18));
+            crate::ui::icons::paint(ui.painter(), ir.shrink(6.0), s.icon(), col);
             ui.painter().text(
-                r.min + vec2(14.0, 14.0),
+                r.min + vec2(48.0, 17.0),
                 egui::Align2::LEFT_TOP,
                 tl(s.label()),
                 FontId::proportional(14.0),
@@ -559,7 +567,16 @@ fn projects(app: &mut App, ui: &mut Ui) {
                 r.width() - 28.0,
             );
             ui.painter()
-                .galley(r.min + vec2(14.0, 38.0), g, theme::TEXT_WEAK);
+                .galley(r.min + vec2(14.0, 48.0), g, theme::TEXT_WEAK);
+            if !s.supports(crate::model::Platform::Fabric) {
+                ui.painter().text(
+                    r.right_bottom() - vec2(12.0, 8.0),
+                    egui::Align2::RIGHT_BOTTOM,
+                    t("nur Plugin", "plugin only"),
+                    FontId::proportional(9.5),
+                    theme::YELLOW,
+                );
+            }
             if hov {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }

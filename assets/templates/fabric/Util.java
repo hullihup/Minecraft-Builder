@@ -315,6 +315,162 @@ __COMMON__
         return Math.sqrt(dx * dx + dy * dy + dz * dz);
     }
 
+    // ----- locations ------------------------------------------------------------
+
+    /** Location as text for storing: world;x;y;z */
+    public static String locToText(Loc l) {
+        if (l == null) return "";
+        return worldName(l.level()) + ";" + l.x() + ";" + l.y() + ";" + l.z();
+    }
+
+    /** Reads a stored location, null if there is none. */
+    public static Loc locFromText(String s) {
+        if (s == null || s.isEmpty() || SERVER == null) return null;
+        String[] p = s.split(";");
+        if (p.length < 4) return null;
+        try {
+            return new Loc(level(p[0]), Double.parseDouble(p[1]), Double.parseDouble(p[2]), Double.parseDouble(p[3]));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    public static void saveLoc(String key, Loc l) {
+        Storage.setText("loc." + key, locToText(l));
+    }
+
+    public static Loc loadLoc(String key) {
+        return locFromText(Storage.getText("loc." + key));
+    }
+
+    /** The spot the player looks at (or the player's position if nothing is in range). */
+    public static Loc lookLoc(ServerPlayer p, double distance) {
+        net.minecraft.world.phys.HitResult hit = p.pick(Math.max(1, Math.min(120, distance)), 1.0f, false);
+        if (hit.getType() == net.minecraft.world.phys.HitResult.Type.MISS) return Loc.of(p);
+        net.minecraft.world.phys.Vec3 v = hit.getLocation();
+        return new Loc((ServerLevel) p.level(), Math.floor(v.x), Math.floor(v.y), Math.floor(v.z));
+    }
+
+    /** Middle of the block the location is in. */
+    public static Loc blockLoc(Loc l) {
+        return new Loc(l.level(), Math.floor(l.x()) + 0.5, Math.floor(l.y()), Math.floor(l.z()) + 0.5);
+    }
+
+    public static boolean inArea(Loc l, Loc a, Loc b) {
+        if (l == null || a == null || b == null) return false;
+        if (l.level() != a.level() || l.level() != b.level()) return false;
+        return between(l.x(), a.x(), b.x()) && between(l.y(), a.y(), b.y()) && between(l.z(), a.z(), b.z());
+    }
+
+    // ----- more resource pack blocks -------------------------------------------
+
+    /** Model id of an item (custom model if set, otherwise the item id). */
+    public static String modelOf(ItemStack st) {
+        if (st == null || st.isEmpty()) return "minecraft:air";
+        Identifier m = st.get(DataComponents.ITEM_MODEL);
+        return m != null ? m.toString() : itemId(st);
+    }
+
+    public static void setHeldModel(ServerPlayer p, String model) {
+        ItemStack st = p.getMainHandItem();
+        if (st.isEmpty()) return;
+        if (model == null || model.isBlank()) st.remove(DataComponents.ITEM_MODEL); else st.set(DataComponents.ITEM_MODEL, id(model));
+    }
+
+    public static double countModel(ServerPlayer p, String model) {
+        int n = 0;
+        for (int i = 0; i < p.getInventory().getContainerSize(); i++) {
+            ItemStack st = p.getInventory().getItem(i);
+            if (!st.isEmpty() && modelOf(st).equalsIgnoreCase(model)) n += st.getCount();
+        }
+        return n;
+    }
+
+    public static boolean takeModel(ServerPlayer p, String model, double amount) {
+        int need = Math.max(1, (int) amount);
+        if (countModel(p, model) < need) return false;
+        for (int i = 0; i < p.getInventory().getContainerSize() && need > 0; i++) {
+            ItemStack st = p.getInventory().getItem(i);
+            if (!st.isEmpty() && modelOf(st).equalsIgnoreCase(model)) {
+                int take = Math.min(need, st.getCount());
+                st.shrink(take);
+                need -= take;
+            }
+        }
+        p.getInventory().setChanged();
+        return true;
+    }
+
+    public static void equipCustom(ServerPlayer p, String slot, String id, String model, String name) {
+        net.minecraft.world.entity.EquipmentSlot s = switch (slot) {
+            case "CHEST" -> net.minecraft.world.entity.EquipmentSlot.CHEST;
+            case "LEGS" -> net.minecraft.world.entity.EquipmentSlot.LEGS;
+            case "FEET" -> net.minecraft.world.entity.EquipmentSlot.FEET;
+            case "OFFHAND" -> net.minecraft.world.entity.EquipmentSlot.OFFHAND;
+            case "MAINHAND" -> net.minecraft.world.entity.EquipmentSlot.MAINHAND;
+            default -> net.minecraft.world.entity.EquipmentSlot.HEAD;
+        };
+        p.setItemSlot(s, customItem(id, 1, model, name, ""));
+    }
+
+    public static void dropCustom(Loc l, String id, double amount, String model, String name) {
+        if (l == null) return;
+        l.level().addFreshEntity(new net.minecraft.world.entity.item.ItemEntity(
+                l.level(), l.x(), l.y(), l.z(), customItem(id, amount, model, name, "")));
+    }
+
+    /** "Debug messages": tells OPs and the console which event ran. */
+    public static void debug(String msg) {
+        __MAIN__.LOGGER.info("[Debug] {}", msg);
+        if (SERVER == null) return;
+        for (ServerPlayer p : SERVER.getPlayerList().getPlayers()) {
+            if (isOp(p)) p.sendSystemMessage(color("&8[&eDebug&8] &7" + msg));
+        }
+    }
+
+    // ----- own blocks, timers, money ------------------------------------------------
+
+    /** "Function" blocks by name. */
+    public static final java.util.Map<String, java.util.function.Consumer<ServerPlayer>> FUNCS = new java.util.HashMap<>();
+
+    public static void call(String name, ServerPlayer p) {
+        java.util.function.Consumer<ServerPlayer> f = FUNCS.get(name);
+        if (f == null) __MAIN__.LOGGER.warn("Unknown function: {}", name);
+        else f.accept(p);
+    }
+
+    private static final java.util.Map<String, Object> TIMERS = new java.util.HashMap<>();
+
+    /** Runs later; a new timer with the same key replaces the old one. */
+    public static void timer(String key, double seconds, Runnable run) {
+        Object token = new Object();
+        TIMERS.put(key, token);
+        Scheduler.later(Math.max(1, (int) (seconds * 20)), () -> {
+            if (TIMERS.get(key) == token) {
+                TIMERS.remove(key);
+                run.run();
+            }
+        });
+    }
+
+    public static boolean cancelTimer(String key) {
+        return TIMERS.remove(key) != null;
+    }
+
+    public static double money(ServerPlayer p) {
+        return Storage.getNum("money." + uuid(p));
+    }
+
+    public static void moneyAdd(ServerPlayer p, double amount) {
+        Storage.setNum("money." + uuid(p), Math.max(0, money(p) + amount));
+    }
+
+    public static boolean moneyTake(ServerPlayer p, double amount) {
+        if (money(p) < amount) return false;
+        Storage.setNum("money." + uuid(p), money(p) - amount);
+        return true;
+    }
+
     // ----- settings (config/<mod>.properties) ----------------------------------------
 
     private static final java.util.Properties CFG = new java.util.Properties();

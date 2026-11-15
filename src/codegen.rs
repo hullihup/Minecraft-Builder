@@ -41,6 +41,9 @@ const STORAGE_JAVA: &str = include_str!("../assets/templates/common/Storage.java
 const UTIL_COMMON: &str = include_str!("../assets/templates/common/UtilCommon.java.part");
 const PAPER_UTIL: &str = include_str!("../assets/templates/paper/Util.java");
 const PAPER_PACK: &str = include_str!("../assets/templates/paper/ResourcePack.java");
+const DATA_FILES: &str = include_str!("../assets/templates/common/DataFiles.java");
+const PAPER_ITEMS: &str = include_str!("../assets/templates/paper/CustomItems.java");
+const FABRIC_ITEMS: &str = include_str!("../assets/templates/fabric/CustomItems.java");
 const FABRIC_UTIL: &str = include_str!("../assets/templates/fabric/Util.java");
 const FABRIC_LOC: &str = include_str!("../assets/templates/fabric/Loc.java");
 const FABRIC_SCHEDULER: &str = include_str!("../assets/templates/fabric/Scheduler.java");
@@ -261,7 +264,8 @@ impl<'a> Gen<'a> {
                 .and_then(|s| s.strip_suffix(EXEC_MARK))
             {
                 let mut branch = inner.clone();
-                if node.kind == "wait" || node.kind == "repeat_delay" {
+                if node.kind == "wait" || node.kind == "timer_start" || node.kind == "repeat_delay"
+                {
                     branch.ret = "return;".into();
                 }
                 let body = self.chain(node.id, slot, &branch, stack);
@@ -409,6 +413,11 @@ impl<'a> Gen<'a> {
             FieldKind::Text
             | FieldKind::Multiline
             | FieldKind::ItemModel
+            | FieldKind::Menu
+            | FieldKind::Recipe
+            | FieldKind::Screen
+            | FieldKind::MenuItemId
+            | FieldKind::MenuName
             | FieldKind::ConfigKey => v.to_string(),
         }
     }
@@ -553,6 +562,10 @@ struct Parts {
     members: Vec<String>,
     /// Paper: plugin.yml command entries.
     commands: Vec<CmdInfo>,
+    /// Extra files (Fabric recipe JSON).
+    files: Vec<(String, Vec<u8>)>,
+    /// Recipe names used so far (must be unique).
+    recipes: HashMap<String, NodeId>,
 }
 
 struct CmdInfo {
@@ -581,6 +594,35 @@ fn new_scope(ret: &str) -> Scope {
         cancellable: false,
         ret: ret.into(),
     }
+}
+
+/// With "Debug messages" on: the event body starts by telling OPs that it ran.
+fn debug_first(
+    g: &Gen,
+    ev: &Node,
+    def: &BlockDef,
+    sc: &Scope,
+    mut body: Vec<String>,
+) -> Vec<String> {
+    if !g.proj.settings.debug || body.is_empty() {
+        return body;
+    }
+    let mut name = def.name.0.to_string();
+    if let Some(c) = g.proj.node_command(ev) {
+        name = format!("/{}", c.name);
+    }
+    let who = match &sc.player {
+        Some(v) => format!(" + \" · \" + Util.name({v})"),
+        None => String::new(),
+    };
+    body.insert(
+        0,
+        format!(
+            "Util.debug({}{who});",
+            java_str(&format!("{name} (#{})", ev.id))
+        ),
+    );
+    body
 }
 
 fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String, NodeId>) {
@@ -612,6 +654,7 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
             Special::Start => {
                 let mut sc = new_scope("return;");
                 let body = g.chain(ev.id, "next", &sc.clone(), &mut vec![]);
+                let body = debug_first(g, ev, def, &sc, body);
                 sc.vars.clear();
                 if body.is_empty() {
                     continue;
@@ -647,6 +690,7 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                 let ticks = ((secs * 20.0).round() as i64).max(1);
                 let sc = new_scope("return;");
                 let body = g.chain(ev.id, "next", &sc, &mut vec![]);
+                let body = debug_first(g, ev, def, &sc, body);
                 if body.is_empty() {
                     continue;
                 }
@@ -904,6 +948,7 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                 }
                 pre.extend(checks);
                 let body = g.chain(ev.id, "next", &sc, &mut vec![]);
+                let body = debug_first(g, ev, def, &sc, body);
                 let mut all = pre;
                 all.extend(body);
                 let title = format!("// /{name} (#{})", ev.id);
@@ -989,6 +1034,26 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                     }
                 }
             }
+            Special::Recipe => {}
+            Special::Function => {
+                // "Own block": a named piece of flow, registered at start.
+                let name = value_of(ev, "name", "belohnung").to_string();
+                let var = format!("v{}_player", ev.id);
+                let mut sc = new_scope("return;");
+                sc.player = Some(var.clone());
+                sc.vars.insert(
+                    (ev.id, "player".to_string()),
+                    (var.clone(), PinType::Player),
+                );
+                let body = g.chain(ev.id, "next", &sc, &mut vec![]);
+                let body = debug_first(g, ev, def, &sc, body);
+                parts.init.push(title);
+                parts
+                    .init
+                    .push(format!("Util.FUNCS.put({}, ({var}) -> {{", java_str(&name)));
+                parts.init.extend(indent(&body, 4));
+                parts.init.push("});".into());
+            }
             Special::None => match g.p {
                 Platform::Paper => {
                     let mut sc = new_scope("return;");
@@ -997,6 +1062,7 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                         code.outs.iter().map(|(p, e)| (*p, e.to_string())).collect();
                     let pre = g.event_vars(ev, def, &mut sc, &exprs);
                     let body = g.chain(ev.id, "next", &sc, &mut vec![]);
+                    let body = debug_first(g, ev, def, &sc, body);
                     if body.is_empty() {
                         continue;
                     }
@@ -1030,6 +1096,7 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                     }
                     pre.extend(g.event_vars(ev, def, &mut sc, &exprs));
                     let body = g.chain(ev.id, "next", &sc, &mut vec![]);
+                    let body = debug_first(g, ev, def, &sc, body);
                     if body.is_empty() {
                         continue;
                     }
@@ -1043,7 +1110,8 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                         if l.trim() == "${body}" {
                             parts.init.extend(indent(&all, 4));
                         } else {
-                            parts.init.push(l.to_string());
+                            let (line, _) = g.subst(l, ev, def, &sc, false);
+                            parts.init.push(line);
                         }
                     }
                 }
@@ -1051,9 +1119,83 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
         }
     }
 
+    // Menus are known by name, so a click in the menu editor can open another one (pages).
+    if g.p == Platform::Paper {
+        for n in ws.nodes.iter().filter(|n| n.kind == "open_menu") {
+            let Some(def) = blocks::get(&n.kind) else {
+                continue;
+            };
+            let field = |id: &str| {
+                let d = def.field(id).map(|f| f.default).unwrap_or("");
+                value_of(n, id, d).to_string()
+            };
+            let pin = |id: &str| {
+                let d = def.input(id).map(|p| p.default).unwrap_or("");
+                value_of(n, id, d).to_string()
+            };
+            parts.init.push(format!(
+                "Util.registerMenu({}, {}, {}, {});",
+                java_str(&field("menu")),
+                java_str(&pin("title")),
+                java_num(&pin("rows")),
+                java_str(&field("items"))
+            ));
+        }
+    }
+
+    // Recipes: registered at start, no flow needed.
+    for n in ws.nodes.iter().filter(|n| n.kind == "recipe") {
+        let Some(def) = blocks::get(&n.kind) else {
+            continue;
+        };
+        g.reached.insert(n.id);
+        if !g.check_platform(n, def) {
+            continue;
+        }
+        let d = crate::recipe::from_node(n);
+        if let Some(msg) = crate::recipe::problem(&d) {
+            g.err(n.id, msg);
+            continue;
+        }
+        if let Some(other) = parts.recipes.get(&d.id) {
+            g.err(
+                n.id,
+                format!("Den Rezept-Namen „{}“ gibt es schon (Block #{other})", d.id),
+            );
+            continue;
+        }
+        parts.recipes.insert(d.id.clone(), n.id);
+        match g.p {
+            Platform::Paper => {
+                if parts.recipes.len() == 1 {
+                    // Recipe book: for players who join, and (next tick, after all recipes) for those online.
+                    parts.members.push("@org.bukkit.event.EventHandler\npublic void onRecipeJoin(final org.bukkit.event.player.PlayerJoinEvent event) {\n    Util.discoverRecipes(event.getPlayer());\n}".into());
+                    parts.init.push("getServer().getScheduler().runTask(this, () -> getServer().getOnlinePlayers().forEach(Util::discoverRecipes));".into());
+                }
+                parts.init.push(format!("// Rezept „{}“ (#{})", d.id, n.id));
+                parts.init.push(crate::recipe::paper_code(&d));
+            }
+            Platform::Fabric => {
+                let modid = &g.proj.settings.id;
+                parts.files.push((
+                    format!("src/main/resources/data/{modid}/recipe/{}.json", d.id),
+                    crate::recipe::fabric_json(&d).into_bytes(),
+                ));
+            }
+        }
+    }
+
     // Blocks that never run.
+    let opened = crate::ui::menu_editor::opened_by_actions(g.proj);
     for n in &ws.nodes {
         if g.reached.contains(&n.id) {
+            continue;
+        }
+        // Menu pages opened by a click action need no flow.
+        if n.kind == "open_menu"
+            && opened.contains(value_of(n, "menu", "shop"))
+            && g.p == Platform::Paper
+        {
             continue;
         }
         if let Some(d) = blocks::get(&n.kind) {
@@ -1084,8 +1226,35 @@ pub fn generate(proj: &Project) -> Output {
     let p = s.platform;
     let main = s.main_class();
     let mut problems = vec![];
+    let menu_names: HashSet<String> = proj
+        .workspaces
+        .iter()
+        .flat_map(|w| w.nodes.iter())
+        .filter(|n| n.kind == "open_menu")
+        .map(|n| value_of(n, "menu", "shop").to_string())
+        .collect();
     for (wi, ws) in proj.workspaces.iter().enumerate() {
         for n in &ws.nodes {
+            // A menu name that no "Open menu" block uses: the block would never react.
+            if let Some(def) = blocks::get(&n.kind) {
+                if let Some(f) = def
+                    .fields
+                    .iter()
+                    .find(|f| matches!(f.kind, FieldKind::MenuName))
+                {
+                    let name = value_of(n, f.id, f.default);
+                    if !menu_names.contains(name) {
+                        problems.push(Problem {
+                            ws: wi,
+                            node: Some(n.id),
+                            msg: format!(
+                                "Es gibt kein Menü „{name}“ – kein Block „Menü öffnen“ hat diesen Menü-Namen"
+                            ),
+                            error: false,
+                        });
+                    }
+                }
+            }
             if n.kind == "send_pack" && !s.pack.enabled() {
                 problems.push(Problem {
                     ws: wi,
@@ -1101,6 +1270,8 @@ pub fn generate(proj: &Project) -> Output {
         init: vec![],
         members: vec![],
         commands: vec![],
+        files: vec![],
+        recipes: HashMap::new(),
     };
     let mut seen_cmds = HashMap::new();
 
@@ -1144,12 +1315,24 @@ pub fn generate(proj: &Project) -> Output {
             .replace("__COMMON__", UTIL_COMMON)
     };
 
+    let give_cmd = s.pack.give_cmd();
+    if let Some(c) = &give_cmd {
+        if seen_cmds.contains_key(c) {
+            problems.push(Problem {
+                ws: 0,
+                node: None,
+                msg: format!("Der Item-Befehl /{c} heißt wie einer deiner Befehle – ändere ihn unter „Texturen & Modelle“"),
+                error: true,
+            });
+        }
+    }
     let main_java = match p {
         Platform::Paper => paper_main(
             &pkg,
             &main,
             &parts,
             s.pack.enabled(),
+            give_cmd.is_some(),
             !proj.config.is_empty(),
         ),
         Platform::Fabric => {
@@ -1170,6 +1353,7 @@ pub fn generate(proj: &Project) -> Output {
                 &s.id,
                 &parts,
                 &imports,
+                give_cmd.is_some(),
                 (!proj.config.is_empty()).then_some(defaults),
             )
         }
@@ -1260,6 +1444,16 @@ tasks.jar {{
                 yaml_str(&s.author),
                 yaml_str(&s.description),
             );
+            if let Some(c) = &give_cmd {
+                parts.commands.push(CmdInfo {
+                    name: c.clone(),
+                    desc: "Gives the custom items of the resource pack".into(),
+                    aliases: vec![],
+                    permission: Some(String::new()),
+                    op_default: true,
+                    usage: format!("/{c} <item> [amount] [player]"),
+                });
+            }
             if !parts.commands.is_empty() {
                 yml.push_str("commands:\n");
                 for c in &parts.commands {
@@ -1312,6 +1506,10 @@ tasks.jar {{
             add(
                 format!("src/main/java/{pkg_path}/Storage.java"),
                 fill(STORAGE_JAVA),
+            );
+            add(
+                format!("src/main/java/{pkg_path}/DataFiles.java"),
+                fill(DATA_FILES),
             );
             if s.pack.enabled() {
                 add(
@@ -1464,6 +1662,10 @@ tasks.withType(JavaCompile).configureEach {{
                 fill(STORAGE_JAVA),
             );
             add(
+                format!("src/main/java/{pkg_path}/DataFiles.java"),
+                fill(DATA_FILES),
+            );
+            add(
                 format!("src/main/java/{pkg_path}/Loc.java"),
                 fill(FABRIC_LOC),
             );
@@ -1473,6 +1675,7 @@ tasks.withType(JavaCompile).configureEach {{
             );
         }
     }
+    files.extend(parts.files.drain(..));
     files.push((
         "gradle/wrapper/gradle-wrapper.jar".into(),
         WRAPPER_JAR.to_vec(),
@@ -1511,9 +1714,16 @@ fn api_version(mc: &str) -> String {
     mc.trim().to_string()
 }
 
-fn paper_main(pkg: &str, main: &str, parts: &Parts, pack: bool, config: bool) -> String {
+fn paper_main(
+    pkg: &str,
+    main: &str,
+    parts: &Parts,
+    pack: bool,
+    give: bool,
+    config: bool,
+) -> String {
     let mut o = format!(
-        "package {pkg};\n\n// Generated by Minecraft Builder. Changes here are overwritten on the next build.\n\npublic final class {main} extends org.bukkit.plugin.java.JavaPlugin implements org.bukkit.event.Listener {{\n    public static {main} INSTANCE;\n\n    @Override\n    public void onEnable() {{\n        INSTANCE = this;\n        Storage.init(getDataFolder().toPath());\n        getServer().getPluginManager().registerEvents(this, this);\n"
+        "package {pkg};\n\n// Generated by Minecraft Builder. Changes here are overwritten on the next build.\n\npublic final class {main} extends org.bukkit.plugin.java.JavaPlugin implements org.bukkit.event.Listener {{\n    public static {main} INSTANCE;\n\n    @Override\n    public void onEnable() {{\n        INSTANCE = this;\n        Storage.init(getDataFolder().toPath());\n        DataFiles.init(getDataFolder().toPath());\n        getServer().getPluginManager().registerEvents(this, this);\n"
     );
     if pack || config {
         o.push_str("        saveDefaultConfig();\n        getConfig().options().copyDefaults(true);\n        saveConfig();\n");
@@ -1521,11 +1731,18 @@ fn paper_main(pkg: &str, main: &str, parts: &Parts, pack: bool, config: bool) ->
     if pack {
         o.push_str("        ResourcePack.init(this);\n");
     }
+    if give {
+        o.push_str("        CustomItems.init(this);\n");
+    }
     for l in indent(&parts.init, 8) {
         o.push_str(&l);
         o.push('\n');
     }
     o.push_str("    }\n");
+    // Bans and ranks work without any blocks wired for them.
+    o.push_str("\n    @org.bukkit.event.EventHandler\n    public void onBanCheck(final org.bukkit.event.player.AsyncPlayerPreLoginEvent event) {\n        Util.banCheck(event);\n    }\n\n    @org.bukkit.event.EventHandler(priority = org.bukkit.event.EventPriority.LOWEST)\n    public void onRankJoin(final org.bukkit.event.player.PlayerJoinEvent event) {\n        Util.applyRank(event.getPlayer());\n    }\n");
+    // Menus: items stay inside unless the menu editor allows taking them.
+    o.push_str("\n    @org.bukkit.event.EventHandler(priority = org.bukkit.event.EventPriority.LOW)\n    public void onMenuGuard(final org.bukkit.event.inventory.InventoryClickEvent event) {\n        Util.menuGuard(event);\n    }\n\n    @org.bukkit.event.EventHandler(priority = org.bukkit.event.EventPriority.LOW)\n    public void onMenuDragGuard(final org.bukkit.event.inventory.InventoryDragEvent event) {\n        Util.menuGuard(event);\n    }\n");
     if pack {
         o.push_str("\n    @Override\n    public void onDisable() {\n        ResourcePack.stop();\n    }\n\n    // Resource pack for joining players\n    @org.bukkit.event.EventHandler\n    public void onPackJoin(final org.bukkit.event.player.PlayerJoinEvent event) {\n        if (getConfig().getBoolean(\"resource-pack.send-on-join\", true)) ResourcePack.send(event.getPlayer());\n    }\n");
     }
@@ -1551,6 +1768,7 @@ fn fabric_main(
     id: &str,
     parts: &Parts,
     imports: &BTreeSet<String>,
+    give: bool,
     config_defaults: Option<String>,
 ) -> String {
     let mut imps: BTreeSet<String> = imports.clone();
@@ -1584,8 +1802,11 @@ fn fabric_main(
         o.push_str(&format!("    {m}\n"));
     }
     o.push_str(
-        "\n    @Override\n    public void onInitialize() {\n        ServerLifecycleEvents.SERVER_STARTING.register(server -> {\n            Util.SERVER = server;\n            Storage.init(FabricLoader.getInstance().getConfigDir().resolve(MOD_ID));\n        });\n        ServerLifecycleEvents.SERVER_STOPPED.register(server -> Util.SERVER = null);\n        ServerTickEvents.END_SERVER_TICK.register(server -> Scheduler.tick());\n",
+        "\n    @Override\n    public void onInitialize() {\n        ServerLifecycleEvents.SERVER_STARTING.register(server -> {\n            Util.SERVER = server;\n            Storage.init(FabricLoader.getInstance().getConfigDir().resolve(MOD_ID));\n            DataFiles.init(FabricLoader.getInstance().getConfigDir().resolve(MOD_ID));\n        });\n        ServerLifecycleEvents.SERVER_STOPPED.register(server -> Util.SERVER = null);\n        ServerTickEvents.END_SERVER_TICK.register(server -> Scheduler.tick());\n",
     );
+    if give {
+        o.push_str("        CustomItems.init();\n");
+    }
     if let Some(d) = config_defaults {
         o.push_str(&format!(
             "        Util.loadConfig(FabricLoader.getInstance().getConfigDir().resolve(MOD_ID + \".properties\"), {});\n",
@@ -1617,7 +1838,8 @@ fn fabric_main(
     o
 }
 
-/// Resource pack files for the export (read from the pack .zip).
+/// Resource pack files for the export (read from the pack .zips, merged, rules applied),
+/// plus the generated class for the give command.
 pub fn pack_files(
     proj: &Project,
     project_file: Option<&std::path::Path>,
@@ -1626,21 +1848,69 @@ pub fn pack_files(
     if !s.pack.enabled() {
         return Ok(vec![]);
     }
-    let path = s.pack.resolve(project_file);
-    if !path.is_file() {
-        return Err(format!("Resourcepack nicht gefunden: {}", path.display()));
+    let paths = s.pack.resolve(project_file);
+    for path in &paths {
+        if !path.is_file() {
+            return Err(format!("Resourcepack nicht gefunden: {}", path.display()));
+        }
+    }
+    let ns = crate::resourcepack::namespace_for(&s.id);
+    let entries = crate::resourcepack::export_entries(&paths, &s.pack.items, &ns, &s.name)?;
+    let mut out = vec![];
+    if let Some(cmd) = s.pack.give_cmd() {
+        let mut models: Vec<String> = entries
+            .keys()
+            .filter_map(|n| {
+                let rest = n.strip_prefix("assets/")?;
+                let (ens, rest) = rest.split_once('/')?;
+                let name = rest.strip_prefix("items/")?.strip_suffix(".json")?;
+                if ens == "minecraft" {
+                    None
+                } else {
+                    Some(format!("{ens}:{name}"))
+                }
+            })
+            .collect();
+        models.sort();
+        let rows: Vec<String> = crate::resourcepack::give_items(&models, &s.pack.items, &ns)
+            .iter()
+            .map(|r| {
+                format!(
+                    "        {{ {} }},",
+                    r.iter().map(|x| java_str(x)).collect::<Vec<_>>().join(", ")
+                )
+            })
+            .collect();
+        let tpl = match s.platform {
+            Platform::Paper => PAPER_ITEMS,
+            Platform::Fabric => FABRIC_ITEMS,
+        };
+        let java = tpl
+            .replace("__PKG__", &s.package)
+            .replace("__MAIN__", &s.main_class())
+            .replace("__CMD__", &cmd)
+            .replace("__ITEMS__", &rows.join("\n"));
+        out.push((
+            format!(
+                "src/main/java/{}/CustomItems.java",
+                s.package.replace('.', "/")
+            ),
+            java.into_bytes(),
+        ));
     }
     match s.platform {
         Platform::Paper => {
-            let zip = crate::resourcepack::export_zip(&path, &s.name)?;
-            Ok(vec![("src/main/resources/resourcepack.zip".into(), zip)])
+            let zip = crate::resourcepack::zip_entries(&entries)?;
+            out.push(("src/main/resources/resourcepack.zip".into(), zip));
         }
-        Platform::Fabric => Ok(crate::resourcepack::export_entries(&path, &s.name)?
-            .into_iter()
-            .filter(|(n, _)| n.starts_with("assets/"))
-            .map(|(n, d)| (format!("src/main/resources/{n}"), d))
-            .collect()),
+        Platform::Fabric => out.extend(
+            entries
+                .into_iter()
+                .filter(|(n, _)| n.starts_with("assets/"))
+                .map(|(n, d)| (format!("src/main/resources/{n}"), d)),
+        ),
     }
+    Ok(out)
 }
 
 /// Writes all generated files into `dir`, removing stale generated sources first.
@@ -1688,13 +1958,30 @@ mod tests {
                 .count();
             assert!(unreached <= 2, "{p:?}: {unreached} blocks are not reached");
             assert!(out.main_java.contains("class AlleBloecke"));
+            // Every block of the test chain must really end up in the code
+            // (only the extra message blocks of events without player may stay unused).
+            let proj = examples::all_blocks_project(p);
+            for w in out
+                .problems
+                .iter()
+                .filter(|x| x.msg.contains("nie ausgeführt"))
+            {
+                let kind = proj.workspaces[w.ws]
+                    .node(w.node.unwrap())
+                    .map(|n| n.kind.clone())
+                    .unwrap_or_default();
+                assert_eq!(
+                    kind, "send_message",
+                    "{p:?}: block {kind} is never run in the self test"
+                );
+            }
         }
     }
 
     #[test]
     fn starters_generate_without_problems() {
         for p in [Platform::Paper, Platform::Fabric] {
-            for s in Starter::ALL {
+            for s in Starter::for_platform(p) {
                 let out = generate(&examples::new_project("Test Plugin", p, s));
                 assert!(out.problems.is_empty(), "{p:?} {s:?}: {:?}", out.problems);
             }

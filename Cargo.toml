@@ -1,6 +1,6 @@
 [package]
 name = "minecraft-builder"
-version = "0.3.1"
+version = "0.8.3"
 edition = "2024"
 description = "Visual block editor for Minecraft plugins (Paper) and mods (Fabric)"
 license = "MIT"
@@ -17,6 +17,7 @@ wgpu = ["eframe/wgpu"]
 glow = ["eframe/glow"]
 
 [dependencies]
+arboard = { version = "3", default-features = false }
 chrono = "0.4.45"
 eframe = { version = "0.37", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "links", "system_fonts", "x11", "wayland"] }
 egui = "0.37"

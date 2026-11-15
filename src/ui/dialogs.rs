@@ -43,31 +43,34 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             let r = egui::Modal::new(egui::Id::unique("dlg_new"))
                 .frame(dialog_frame())
                 .show(ctx, |ui| {
-                    ui.set_width(600.0);
+                    ui.set_width(780.0);
                     ui.label(
                         RichText::new(t("Neues Projekt", "New project"))
                             .size(20.0)
                             .strong(),
                     );
                     ui.add_space(10.0);
-                    ui.label(RichText::new(t("Name", "Name")).color(theme::TEXT_WEAK));
-                    let te = ui.add(egui::TextEdit::singleline(name).desired_width(f32::INFINITY));
-                    if te.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        create = true;
-                    }
-                    ui.add_space(10.0);
                     ui.label(
-                        RichText::new(t("Was möchtest du bauen?", "What do you want to build?"))
-                            .color(theme::TEXT_WEAK),
+                        RichText::new(t(
+                            "1 · Was möchtest du bauen?",
+                            "1 · What do you want to build?",
+                        ))
+                        .color(theme::TEXT_WEAK),
                     );
+                    ui.add_space(2.0);
                     ui.horizontal(|ui| {
-                        for (p, title, sub) in [
+                        ui.spacing_mut().item_spacing.x = 12.0;
+                        for (p, title, sub, tag) in [
                             (
                                 Platform::Paper,
                                 t("Plugin (Paper)", "Plugin (Paper)"),
                                 t(
                                     "Für Server – Spieler brauchen nichts zu installieren",
                                     "For servers – players install nothing",
+                                ),
+                                t(
+                                    "Menüs · Scoreboard · Resourcepack per Download",
+                                    "Menus · scoreboard · resource pack by download",
                                 ),
                             ),
                             (
@@ -77,16 +80,22 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                                     "Für Fabric-Server oder Einzelspieler",
                                     "For Fabric servers or singleplayer",
                                 ),
+                                t(
+                                    "Texturen direkt im Mod · läuft auch im Einzelspieler",
+                                    "Textures inside the mod · also runs in singleplayer",
+                                ),
                             ),
                         ] {
                             let on = *platform == p;
                             let (rect, resp) =
-                                ui.allocate_exact_size(vec2(292.0, 64.0), egui::Sense::click());
+                                ui.allocate_exact_size(vec2(384.0, 78.0), egui::Sense::click());
                             ui.painter().rect(
                                 rect,
                                 8.0,
                                 if on {
                                     theme::ACCENT_BG
+                                } else if resp.hovered() {
+                                    Color32::from_rgb(0x30, 0x32, 0x38)
                                 } else {
                                     Color32::from_rgb(0x2A, 0x2C, 0x31)
                                 },
@@ -96,28 +105,161 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                                 ),
                                 egui::StrokeKind::Inside,
                             );
+                            crate::ui::icons::paint(
+                                ui.painter(),
+                                egui::Rect::from_center_size(
+                                    rect.left_center() + vec2(30.0, 0.0),
+                                    vec2(26.0, 26.0),
+                                ),
+                                if p == Platform::Paper {
+                                    crate::ui::icons::Icon::Server
+                                } else {
+                                    crate::ui::icons::Icon::Puzzle
+                                },
+                                if on { theme::ACCENT } else { theme::TEXT_WEAK },
+                            );
                             ui.painter().text(
-                                rect.min + vec2(12.0, 12.0),
+                                rect.min + vec2(60.0, 10.0),
                                 egui::Align2::LEFT_TOP,
                                 title,
                                 egui::FontId::proportional(15.0),
                                 theme::TEXT,
                             );
                             ui.painter().text(
-                                rect.min + vec2(12.0, 36.0),
+                                rect.min + vec2(60.0, 32.0),
                                 egui::Align2::LEFT_TOP,
                                 sub,
-                                egui::FontId::proportional(11.0),
+                                egui::FontId::proportional(11.5),
                                 theme::TEXT_WEAK,
+                            );
+                            ui.painter().text(
+                                rect.min + vec2(60.0, 52.0),
+                                egui::Align2::LEFT_TOP,
+                                tag,
+                                egui::FontId::proportional(10.5),
+                                if on { theme::ACCENT } else { theme::TEXT_WEAK },
                             );
                             if resp.clicked() {
                                 *platform = p;
                             }
                         }
                     });
-                    ui.add_space(10.0);
-                    ui.label(RichText::new(t("Speicherort", "Location")).color(theme::TEXT_WEAK));
+                    if !starter.supports(*platform) {
+                        *starter = Starter::Welcome;
+                    }
+                    ui.add_space(12.0);
+                    let list = Starter::for_platform(*platform);
+                    ui.label(
+                        RichText::new(format!(
+                            "2 · {} ({} {})",
+                            t("Vorlage", "Template"),
+                            list.len(),
+                            match *platform {
+                                Platform::Paper => t("für Plugins", "for plugins"),
+                                Platform::Fabric => t("für Mods", "for mods"),
+                            }
+                        ))
+                        .color(theme::TEXT_WEAK),
+                    );
+                    ui.add_space(2.0);
+                    let card = vec2(252.0, 92.0);
+                    for row in list.chunks(3) {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 12.0;
+                            for s in row {
+                                let on = *starter == *s;
+                                let (rect, resp) =
+                                    ui.allocate_exact_size(card, egui::Sense::click());
+                                let col = s.color();
+                                ui.painter().rect(
+                                    rect,
+                                    8.0,
+                                    if on {
+                                        theme::ACCENT_BG
+                                    } else if resp.hovered() {
+                                        Color32::from_rgb(0x30, 0x32, 0x38)
+                                    } else {
+                                        Color32::from_rgb(0x2A, 0x2C, 0x31)
+                                    },
+                                    egui::Stroke::new(
+                                        if on { 2.0 } else { 1.0 },
+                                        if on { theme::ACCENT } else { theme::BORDER },
+                                    ),
+                                    egui::StrokeKind::Inside,
+                                );
+                                let ir = egui::Rect::from_min_size(
+                                    rect.min + vec2(10.0, 10.0),
+                                    vec2(28.0, 28.0),
+                                );
+                                ui.painter().rect_filled(ir, 6.0, col.gamma_multiply(0.18));
+                                crate::ui::icons::paint(
+                                    ui.painter(),
+                                    ir.shrink(6.0),
+                                    s.icon(),
+                                    col,
+                                );
+                                ui.painter().text(
+                                    rect.min + vec2(46.0, 15.0),
+                                    egui::Align2::LEFT_TOP,
+                                    tl(s.label()),
+                                    egui::FontId::proportional(13.5),
+                                    theme::TEXT,
+                                );
+                                let g = ui.painter().layout(
+                                    tl(s.desc()).to_string(),
+                                    egui::FontId::proportional(11.0),
+                                    theme::TEXT_WEAK,
+                                    card.x - 22.0,
+                                );
+                                ui.painter().galley(
+                                    rect.min + vec2(11.0, 44.0),
+                                    g,
+                                    theme::TEXT_WEAK,
+                                );
+                                // Tags in the top right corner.
+                                let mut x = rect.right() - 8.0;
+                                for tag in s.tags().iter().rev().take(1) {
+                                    let tg = ui.painter().layout_no_wrap(
+                                        tl(*tag).to_string(),
+                                        egui::FontId::proportional(9.5),
+                                        col,
+                                    );
+                                    let tr = egui::Rect::from_min_size(
+                                        egui::pos2(x - tg.size().x - 10.0, rect.bottom() - 20.0),
+                                        tg.size() + vec2(10.0, 4.0),
+                                    );
+                                    if tr.left() > rect.left() + 150.0 {
+                                        ui.painter().rect_filled(tr, 7.0, col.gamma_multiply(0.14));
+                                        ui.painter().galley(tr.min + vec2(5.0, 2.0), tg, col);
+                                    }
+                                    x = tr.left() - 4.0;
+                                }
+                                let _ = x;
+                                if resp.clicked() {
+                                    *starter = *s;
+                                }
+                                if resp.double_clicked() {
+                                    create = true;
+                                }
+                            }
+                        });
+                        ui.add_space(4.0);
+                    }
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new(t("3 · Name und Speicherort", "3 · Name and location"))
+                            .color(theme::TEXT_WEAK),
+                    );
+                    ui.add_space(2.0);
                     ui.horizontal(|ui| {
+                        let te = ui.add(
+                            egui::TextEdit::singleline(name)
+                                .hint_text(t("Name", "Name"))
+                                .desired_width(250.0),
+                        );
+                        if te.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            create = true;
+                        }
                         ui.add(
                             egui::TextEdit::singleline(folder)
                                 .desired_width(ui.available_width() - 40.0),
@@ -149,18 +291,6 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         .size(11.0)
                         .color(theme::TEXT_WEAK),
                     );
-                    ui.add_space(10.0);
-                    ui.label(RichText::new(t("Vorlage", "Template")).color(theme::TEXT_WEAK));
-                    for s in Starter::ALL {
-                        ui.horizontal(|ui| {
-                            ui.radio_value(starter, s, RichText::new(tl(s.label())).strong());
-                            ui.label(
-                                RichText::new(tl(s.desc()))
-                                    .size(11.5)
-                                    .color(theme::TEXT_WEAK),
-                            );
-                        });
-                    }
                     ui.add_space(14.0);
                     ui.horizontal(|ui| {
                         if ui.add(primary(t("Erstellen", "Create"))).clicked() {
@@ -257,6 +387,60 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 }
                 close = true;
             }
+        }
+        Dialog::Replace { find, with } => {
+            let n = app.count_text(find);
+            let mut go = false;
+            let r = egui::Modal::new(egui::Id::unique("dlg_replace"))
+                .frame(dialog_frame())
+                .show(ctx, |ui| {
+                    ui.set_width(460.0);
+                    ui.label(RichText::new(t("Suchen & Ersetzen", "Search & replace")).size(18.0).strong());
+                    ui.label(
+                        RichText::new(t(
+                            "Sucht in allen Texten und Werten aller Blöcke und Notizen des Projekts.",
+                            "Searches all texts and values of all blocks and notes of the project.",
+                        ))
+                        .size(11.5)
+                        .color(theme::TEXT_WEAK),
+                    );
+                    ui.add_space(8.0);
+                    ui.label(RichText::new(t("Suchen nach", "Search for")).color(theme::TEXT_WEAK));
+                    ui.add(egui::TextEdit::singleline(find).desired_width(f32::INFINITY));
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(t("Ersetzen durch", "Replace with")).color(theme::TEXT_WEAK));
+                    ui.add(egui::TextEdit::singleline(with).desired_width(f32::INFINITY));
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new(format!("{n} {}", t("Treffer", "matches"))).color(if n > 0 {
+                            theme::GREEN
+                        } else {
+                            theme::TEXT_WEAK
+                        }),
+                    );
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(n > 0, primary(t("Alle ersetzen", "Replace all")))
+                            .clicked()
+                        {
+                            go = true;
+                        }
+                        if ui.button(t("Schließen", "Close")).clicked() {
+                            close = true;
+                        }
+                    });
+                });
+            if r.should_close() {
+                close = true;
+            }
+            if go {
+                let (f, w) = (find.clone(), with.clone());
+                app.replace_text(&f, &w);
+            }
+        }
+        Dialog::Settings => {
+            crate::ui::settings::show(app, ctx, &mut close);
         }
         Dialog::Updates => {
             let r = egui::Modal::new(egui::Id::unique("dlg_updates")).frame(dialog_frame()).show(ctx, |ui| {

@@ -90,6 +90,104 @@ pub fn field_editor(
                     }
                 });
         }
+        FieldKind::Screen => {
+            ui.label(
+                egui::RichText::new(format!("{} {}", v.lines().count(), t("Zeilen", "lines")))
+                    .size(11.5)
+                    .color(theme::TEXT_WEAK),
+            );
+        }
+        FieldKind::Recipe => {
+            let r = crate::recipe::parse(&v);
+            let n = r.grid.iter().filter(|g| !g.is_empty()).count();
+            ui.label(
+                egui::RichText::new(format!(
+                    "{n} {} → {}",
+                    t("Zutaten", "ingredients"),
+                    crate::items::display_name(&r.result)
+                ))
+                .size(11.5)
+                .color(theme::TEXT_WEAK),
+            );
+        }
+        FieldKind::MenuName => {
+            let names = crate::ui::menu_editor::menu_names();
+            let known = names.contains(&v);
+            egui::ComboBox::from_id_salt(id_salt)
+                .width(width)
+                .selected_text(if known || v.is_empty() {
+                    egui::RichText::new(v.clone())
+                } else {
+                    egui::RichText::new(format!("{v} ⚠")).color(theme::YELLOW)
+                })
+                .height(300.0)
+                .show_ui(ui, |ui| {
+                    ui.set_min_width(200.0);
+                    for n in &names {
+                        ui.selectable_value(&mut v, n.clone(), n);
+                    }
+                    if names.is_empty() {
+                        ui.label(
+                            egui::RichText::new(t(
+                                "Noch kein Block „Menü öffnen“ im Projekt.",
+                                "No “Open menu” block in the project yet.",
+                            ))
+                            .size(11.0)
+                            .color(theme::TEXT_WEAK),
+                        );
+                    }
+                    ui.separator();
+                    ui.label(
+                        egui::RichText::new(t("Eigenen Namen eingeben:", "Type a name:"))
+                            .size(11.0)
+                            .color(theme::TEXT_WEAK),
+                    );
+                    ui.add(egui::TextEdit::singleline(&mut v).desired_width(f32::INFINITY));
+                });
+        }
+        FieldKind::MenuItemId => {
+            let menu = get_val(values, "menu", "shop");
+            let ids = crate::ui::menu_editor::ids_of(&menu);
+            let any = t("(jedes Item)", "(any item)");
+            egui::ComboBox::from_id_salt(id_salt)
+                .width(width)
+                .selected_text(if v.is_empty() { any.to_string() } else { v.clone() })
+                .height(300.0)
+                .show_ui(ui, |ui| {
+                    ui.set_min_width(200.0);
+                    ui.selectable_value(&mut v, String::new(), any);
+                    for (id, item) in &ids {
+                        ui.selectable_value(&mut v, id.clone(), id)
+                            .on_hover_text(item);
+                    }
+                    if ids.is_empty() {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} „{menu}“ {}",
+                                t("Im Menü", "The menu"),
+                                t(
+                                    "hat noch keine IDs. Vergib sie im Menü-Editor (Menü öffnen → Menü bearbeiten → Platz anklicken → ID).",
+                                    "has no IDs yet. Set them in the menu editor (Open menu → Edit menu → click a slot → ID).",
+                                )
+                            ))
+                            .size(11.0)
+                            .color(theme::TEXT_WEAK),
+                        );
+                    }
+                    ui.separator();
+                    ui.label(egui::RichText::new(t("Eigene ID eingeben:", "Type an ID:")).size(11.0).color(theme::TEXT_WEAK));
+                    ui.add(egui::TextEdit::singleline(&mut v).desired_width(f32::INFINITY));
+                });
+            v = crate::ui::menu_editor::clean_id(&v);
+        }
+        FieldKind::Menu => {
+            let n = crate::ui::menu_editor::parse(&v).len();
+            ui.label(
+                egui::RichText::new(format!("{n} {}", t("Items im Menü", "items in the menu")))
+                    .size(11.5)
+                    .color(theme::TEXT_WEAK),
+            );
+        }
         FieldKind::ConfigKey => {
             let keys = config_keys();
             let shown = if v.is_empty() {

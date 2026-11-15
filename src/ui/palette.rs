@@ -693,6 +693,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         app.settings.recent_blocks.insert(0, key);
         app.settings.recent_blocks.truncate(12);
         let id = match &e {
+            Entry::Block(d) if pal.connect.is_none() => app.add_node_auto(d.id, pal.scene_pos),
             Entry::Block(d) => app.add_node(d.id, pal.scene_pos),
             Entry::Command(cid, _) => {
                 let id = app.add_node("ev_command", pal.scene_pos);
