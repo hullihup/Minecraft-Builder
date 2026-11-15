@@ -1166,6 +1166,21 @@ fn sidebar_build(app: &mut App, ui: &mut Ui) {
         });
         ui.add_space(10.0);
     }
+    section_header(ui, t("Fehlersuche", "Finding mistakes"));
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        widgets::toggle(ui, &mut app.project.settings.debug);
+        ui.label(RichText::new(t("Debug-Meldungen im Spiel", "Debug messages in game")).size(12.5));
+    });
+    ui.label(
+        RichText::new(t(
+            "OPs sehen im Chat, welches Event gerade läuft und für wen – so findest du schnell, wo etwas hängt. Vor dem Veröffentlichen wieder ausschalten.",
+            "OPs see in chat which event runs and for whom – so you quickly find where something hangs. Switch it off again before publishing.",
+        ))
+        .size(11.0)
+        .color(theme::TEXT_WEAK),
+    );
+    ui.add_space(14.0);
     section_header(ui, t("Server (automatisch hochladen)", "Server (automatic upload)"));
     ui.add_space(4.0);
     ui.label(

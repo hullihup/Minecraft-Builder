@@ -701,4 +701,12 @@ __COMMON__
         if (l == null || l.getWorld() == null) return;
         l.getWorld().dropItemNaturally(l, customItem(id, amount, model, name, ""));
     }
+
+    /** "Debug messages": tells OPs and the console which event ran. */
+    public static void debug(String msg) {
+        __MAIN__.INSTANCE.getLogger().info("[Debug] " + msg);
+        for (Player p : Bukkit.getOnlinePlayers()) {
+            if (p.isOp()) p.sendMessage(color("&8[&eDebug&8] &7" + msg));
+        }
+    }
 }

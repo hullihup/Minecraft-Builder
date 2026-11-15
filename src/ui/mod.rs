@@ -10,4 +10,5 @@ pub mod recipe_editor;
 pub mod panels;
 pub mod resources;
 pub mod settings;
+pub mod trace;
 pub mod widgets;

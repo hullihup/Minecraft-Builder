@@ -565,6 +565,26 @@ fn new_scope(ret: &str) -> Scope {
     }
 }
 
+/// With "Debug messages" on: the event body starts by telling OPs that it ran.
+fn debug_first(g: &Gen, ev: &Node, def: &BlockDef, sc: &Scope, mut body: Vec<String>) -> Vec<String> {
+    if !g.proj.settings.debug || body.is_empty() {
+        return body;
+    }
+    let mut name = def.name.0.to_string();
+    if let Some(c) = g.proj.node_command(ev) {
+        name = format!("/{}", c.name);
+    }
+    let who = match &sc.player {
+        Some(v) => format!(" + \" · \" + Util.name({v})"),
+        None => String::new(),
+    };
+    body.insert(
+        0,
+        format!("Util.debug({}{who});", java_str(&format!("{name} (#{})", ev.id))),
+    );
+    body
+}
+
 fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String, NodeId>) {
     let ws = g.ws;
     let mut events: Vec<&Node> = ws
@@ -594,6 +614,7 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
             Special::Start => {
                 let mut sc = new_scope("return;");
                 let body = g.chain(ev.id, "next", &sc.clone(), &mut vec![]);
+                let body = debug_first(g, ev, def, &sc, body);
                 sc.vars.clear();
                 if body.is_empty() {
                     continue;
@@ -629,6 +650,7 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                 let ticks = ((secs * 20.0).round() as i64).max(1);
                 let sc = new_scope("return;");
                 let body = g.chain(ev.id, "next", &sc, &mut vec![]);
+                let body = debug_first(g, ev, def, &sc, body);
                 if body.is_empty() {
                     continue;
                 }
@@ -886,6 +908,7 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                 }
                 pre.extend(checks);
                 let body = g.chain(ev.id, "next", &sc, &mut vec![]);
+                let body = debug_first(g, ev, def, &sc, body);
                 let mut all = pre;
                 all.extend(body);
                 let title = format!("// /{name} (#{})", ev.id);
@@ -980,6 +1003,7 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                         code.outs.iter().map(|(p, e)| (*p, e.to_string())).collect();
                     let pre = g.event_vars(ev, def, &mut sc, &exprs);
                     let body = g.chain(ev.id, "next", &sc, &mut vec![]);
+                let body = debug_first(g, ev, def, &sc, body);
                     if body.is_empty() {
                         continue;
                     }
@@ -1013,6 +1037,7 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
                     }
                     pre.extend(g.event_vars(ev, def, &mut sc, &exprs));
                     let body = g.chain(ev.id, "next", &sc, &mut vec![]);
+                let body = debug_first(g, ev, def, &sc, body);
                     if body.is_empty() {
                         continue;
                     }

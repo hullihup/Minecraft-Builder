@@ -97,6 +97,8 @@ enum NodeEvent {
     OpenMenu(NodeId),
     /// Open the recipe editor.
     OpenRecipe(NodeId),
+    /// Test mode for this event.
+    Trace(NodeId),
     /// Connect a free flow output to this block's flow input.
     ConnectFlow {
         from: NodeId,
@@ -633,6 +635,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         recipe_prev.insert(nid, (rtype, cells, (res_id, res_tex), r.amount));
     }
     let free_outputs = app.free_flow_outputs();
+    let lit = crate::ui::trace::lit(app, ctx.input(|i| i.time));
     let mut new_sizes = HashMap::new();
     for idx in order {
         let node = &mut app.project.workspaces[ws_idx].nodes[idx];
@@ -697,6 +700,12 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         }
         let nid = node.id;
         body.context_menu(|ui| {
+            if def.kind == Kind::Event
+                && ui.button(t("▶ Ablauf ausprobieren", "▶ Try out the flow")).clicked()
+            {
+                events.push(NodeEvent::Trace(nid));
+                ui.close();
+            }
             if ui.button(t("Duplizieren", "Duplicate")).clicked() {
                 events.push(NodeEvent::Duplicate(nid));
                 ui.close();
@@ -833,6 +842,12 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             );
             let mresp = mresp.on_hover_text(t("Block-Menü", "Block menu"));
             egui::Popup::menu(&mresp).show(|ui| {
+                if def.kind == Kind::Event
+                    && ui.button(t("▶ Ablauf ausprobieren", "▶ Try out the flow")).clicked()
+                {
+                    events.push(NodeEvent::Trace(nid));
+                    ui.close();
+                }
                 if ui.button(t("Duplizieren", "Duplicate")).clicked() {
                     events.push(NodeEvent::Duplicate(nid));
                     ui.close();
@@ -1365,7 +1380,14 @@ pub fn show(app: &mut App, ui: &mut Ui) {
 
         // Background + border
         let problem = node_problems.get(&nid);
-        let border = if selected {
+        let border = if let Some(cur) = lit.get(&nid) {
+            let pulse = (ctx.input(|i| i.time) * 6.0).sin() as f32 * 0.5 + 0.5;
+            if *cur {
+                Stroke::new(3.0 + pulse * 1.5, theme::GREEN)
+            } else {
+                Stroke::new(2.0, theme::GREEN.gamma_multiply(0.7))
+            }
+        } else if selected {
             Stroke::new(2.0, theme::ACCENT)
         } else if let Some((true, _)) = problem {
             Stroke::new(1.5, theme::RED)
@@ -1844,6 +1866,10 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     PinRef { node: to, pin: "in".into() },
                     true,
                 );
+            }
+            NodeEvent::Trace(id) => {
+                let now = ctx.input(|i| i.time);
+                crate::ui::trace::start(app, ws_idx, Some(id), now);
             }
             NodeEvent::OpenRecipe(id) => {
                 app.selection.clear();
@@ -2367,6 +2393,22 @@ fn toolbar(app: &mut App, ui: &mut Ui, rect: Rect, to_scene: TSTransform) {
                     });
                     app.selected_note = Some(id);
                     app.selection.clear();
+                }
+                if crate::ui::icons::styled_button(
+                    ui,
+                    Some(crate::ui::icons::Icon::Play),
+                    t("Testen", "Test"),
+                    Some((Color32::from_rgb(0x1C, 0x6E, 0x3A), Color32::WHITE)),
+                )
+                .on_hover_text(t(
+                    "Zeigt Schritt für Schritt, welche Blöcke beim ausgewählten (oder ersten) Event laufen",
+                    "Shows step by step which blocks run for the selected (or first) event",
+                ))
+                .clicked()
+                {
+                    let now = ui.ctx().input(|i| i.time);
+                    let ws = app.active_ws;
+                    crate::ui::trace::start(app, ws, None, now);
                 }
                 let snap = app.settings.snap;
                 let snap_btn = tool_icon(ui, crate::ui::icons::Icon::Grid, snap)

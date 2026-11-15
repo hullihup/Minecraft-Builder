@@ -84,6 +84,9 @@ pub struct ProjectSettings {
     /// Id of the server (app settings) the jar is uploaded to after a build (0 = none).
     #[serde(default)]
     pub deploy_server: u64,
+    /// Plugin/mod tells OPs in chat which events run (for finding mistakes).
+    #[serde(default)]
+    pub debug: bool,
 }
 
 /// One resource pack .zip of the project. Several packs are merged into one.
@@ -249,6 +252,7 @@ impl Default for ProjectSettings {
             deploy_dir: String::new(),
             pack: PackSettings::default(),
             deploy_server: 0,
+            debug: false,
         }
     }
 }

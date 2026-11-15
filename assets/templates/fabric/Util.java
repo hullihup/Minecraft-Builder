@@ -418,4 +418,13 @@ __COMMON__
         l.level().addFreshEntity(new net.minecraft.world.entity.item.ItemEntity(
                 l.level(), l.x(), l.y(), l.z(), customItem(id, amount, model, name, "")));
     }
+
+    /** "Debug messages": tells OPs and the console which event ran. */
+    public static void debug(String msg) {
+        __MAIN__.LOGGER.info("[Debug] {}", msg);
+        if (SERVER == null) return;
+        for (ServerPlayer p : SERVER.getPlayerList().getPlayers()) {
+            if (isOp(p)) p.sendSystemMessage(color("&8[&eDebug&8] &7" + msg));
+        }
+    }
 }
