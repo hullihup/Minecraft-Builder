@@ -134,6 +134,8 @@ pub struct VanillaCache {
     pub extra_items: Vec<(String, bool)>,
     /// Pictures made in the current frame (kept small so the UI stays smooth).
     pub loaded_this_frame: usize,
+    /// The packs were already checked in this frame.
+    pub checked_this_frame: bool,
 }
 
 #[derive(Clone)]
@@ -634,6 +636,10 @@ impl App {
 
     /// Makes sure the item renderer reads the current packs and vanilla source.
     pub fn ensure_renderer(&mut self) {
+        if self.vanilla.checked_this_frame && self.vanilla.key.is_some() {
+            return;
+        }
+        self.vanilla.checked_this_frame = true;
         let vanilla = if self.settings.vanilla_textures {
             self.settings.vanilla_source()
         } else {
@@ -1734,6 +1740,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.vanilla.loaded_this_frame = 0;
+        self.vanilla.checked_this_frame = false;
         self.poll_jobs();
         ui::settings::poll(self, &ctx);
         ui::plugins::poll(self, &ctx);

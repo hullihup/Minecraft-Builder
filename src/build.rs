@@ -546,13 +546,29 @@ impl AppSettings {
         }
     }
     /// The zip/jar the vanilla item pictures come from, if any.
+    /// The Minecraft textures to use. Looking on disk is slow (the .minecraft search
+    /// lists folders), so the answer is kept for a few seconds.
     pub fn vanilla_source(&self) -> Option<PathBuf> {
-        let custom = self.texture_source.trim();
-        if !custom.is_empty() {
-            let p = PathBuf::from(custom);
-            return p.is_file().then_some(p);
+        type Cached = Option<(std::time::Instant, String, Option<PathBuf>)>;
+        static CACHE: std::sync::Mutex<Cached> = std::sync::Mutex::new(None);
+        let custom = self.texture_source.trim().to_string();
+        if let Ok(c) = CACHE.lock() {
+            if let Some((at, key, found)) = c.as_ref() {
+                if *key == custom && at.elapsed().as_secs_f32() < 5.0 {
+                    return found.clone();
+                }
+            }
         }
-        crate::resourcepack::find_minecraft_jar()
+        let found = if !custom.is_empty() {
+            let p = PathBuf::from(&custom);
+            p.is_file().then_some(p)
+        } else {
+            crate::resourcepack::find_minecraft_jar()
+        };
+        if let Ok(mut c) = CACHE.lock() {
+            *c = Some((std::time::Instant::now(), custom, found.clone()));
+        }
+        found
     }
     pub fn server(&self, id: u64) -> Option<&crate::server::ServerConfig> {
         self.servers.iter().find(|s| s.id == id && id != 0)

@@ -356,7 +356,13 @@ pub struct ItemPicker {
     pub query: String,
     pub tab: PickTab,
     pub just_opened: bool,
+    /// Results of the last search: (query, tab, pack models, extra items) -> (entries, pack count).
+    cache: Option<(PickKey, std::sync::Arc<Vec<Entry>>, usize)>,
 }
+
+/// (item id, model id, label)
+type Entry = (String, String, String);
+type PickKey = (String, PickTab, usize, usize);
 
 impl ItemPicker {
     pub fn new(target: PickTarget, tab: PickTab) -> Self {
@@ -365,6 +371,7 @@ impl ItemPicker {
             query: String::new(),
             tab,
             just_opened: true,
+            cache: None,
         }
     }
 }
@@ -1394,18 +1401,8 @@ fn apply_pick(app: &mut App, target: &PickTarget, item: String, model: String) {
     }
 }
 
-pub fn item_picker(app: &mut App, ctx: &egui::Context) {
-    let Some(pk) = app.item_picker.as_mut() else {
-        return;
-    };
-    let target = pk.target.clone();
-    let mut query = pk.query.clone();
-    let mut tab = pk.tab;
-    let just_opened = std::mem::take(&mut pk.just_opened);
-    let for_menu = matches!(
-        target,
-        PickTarget::MenuSlot(_) | PickTarget::RecipeSlot(crate::ui::recipe_editor::RESULT)
-    );
+/// Search results of the item picker and the number of resource pack models.
+fn picker_entries(app: &App, query: &str, tab: PickTab, for_menu: bool) -> (Vec<Entry>, usize) {
     let pack_items: Vec<(String, String)> = match &app.pack.info {
         Some(Ok(info)) => info
             .item_models
@@ -1422,13 +1419,109 @@ pub fn item_picker(app: &mut App, ctx: &egui::Context) {
             .collect(),
         _ => vec![],
     };
+    let extra = &app.vanilla.extra_items;
+    let entries: Vec<Entry> = if tab == PickTab::Pack {
+        let q = query.trim().to_lowercase();
+        pack_items
+            .iter()
+            .filter(|(_, m)| q.is_empty() || m.contains(&q))
+            .map(|(b, m)| (b.clone(), m.clone(), m.clone()))
+            .collect()
+    } else {
+        let filter = match tab {
+            PickTab::Items => items::Filter::Items,
+            PickTab::Blocks => items::Filter::Blocks,
+            _ => items::Filter::All,
+        };
+        let mut v: Vec<(String, String, String)> = vec![];
+        // Custom models first when searching in a menu.
+        if for_menu && tab == PickTab::All && !query.trim().is_empty() {
+            let q = query.trim().to_lowercase();
+            v.extend(
+                pack_items
+                    .iter()
+                    .filter(|(_, m)| m.contains(&q))
+                    .map(|(b, m)| (b.clone(), m.clone(), m.clone())),
+            );
+        }
+        v.extend(items::search(&query, filter).into_iter().map(|i| {
+            (
+                format!("minecraft:{}", i.id),
+                String::new(),
+                i.name.to_string(),
+            )
+        }));
+        // Newer items that only the texture pack knows.
+        let words: Vec<String> = query
+            .trim()
+            .to_lowercase()
+            .replace("minecraft:", "")
+            .split([' ', '_'])
+            .filter(|w| !w.is_empty())
+            .map(str::to_string)
+            .collect();
+        v.extend(
+            extra
+                .iter()
+                .filter(|(_, block)| match filter {
+                    items::Filter::Items => !block,
+                    items::Filter::Blocks => *block,
+                    items::Filter::All => true,
+                })
+                .filter(|(id, _)| words.iter().all(|w| id.contains(w.as_str())))
+                .map(|(id, _)| (format!("minecraft:{id}"), String::new(), items::display_name(id))),
+        );
+        v
+    };
+    let n = pack_items.len();
+    (entries, n)
+}
+
+pub fn item_picker(app: &mut App, ctx: &egui::Context) {
+    let Some(pk) = app.item_picker.as_mut() else {
+        return;
+    };
+    let target = pk.target.clone();
+    let mut query = pk.query.clone();
+    let mut tab = pk.tab;
+    let just_opened = std::mem::take(&mut pk.just_opened);
+    let for_menu = matches!(
+        target,
+        PickTarget::MenuSlot(_) | PickTarget::RecipeSlot(crate::ui::recipe_editor::RESULT)
+    );
     let mut picked: Option<(String, String)> = None;
     let mut close = false;
     let mut pick_textures = false;
     app.ensure_renderer();
-    let extra = app.vanilla.extra_items.clone();
+    // Searching ~1500 items is only redone when the search changes.
+    let n_models = match &app.pack.info {
+        Some(Ok(info)) => info.item_models.len(),
+        _ => 0,
+    };
+    let key: PickKey = (query.clone(), tab, n_models, app.vanilla.extra_items.len());
+    let cached = app
+        .item_picker
+        .as_ref()
+        .and_then(|pk| pk.cache.as_ref())
+        .filter(|(k, _, _)| *k == key)
+        .map(|(_, e, n)| (e.clone(), *n));
+    let (entries, pack_count) = match cached {
+        Some(c) => c,
+        None => {
+            let (e, n) = picker_entries(app, &query, tab, for_menu);
+            let e = std::sync::Arc::new(e);
+            if let Some(pk) = app.item_picker.as_mut() {
+                pk.cache = Some((key, e.clone(), n));
+            }
+            (e, n)
+        }
+    };
 
-    let modal = egui::Modal::new(Id::unique("item_picker"))
+    // Always above the menu / recipe editor: otherwise, after clicking into the editor,
+    // the search opened behind it and blocked everything.
+    let picker_id = Id::unique("item_picker");
+    ctx.move_to_top(egui::LayerId::new(egui::Order::Foreground, picker_id));
+    let modal = egui::Modal::new(picker_id)
         .frame(
             egui::Frame::new()
                 .fill(Color32::from_rgb(0x22, 0x24, 0x28))
@@ -1481,67 +1574,14 @@ pub fn item_picker(app: &mut App, ctx: &egui::Context) {
                 if for_menu {
                     chip(
                         ui,
-                        format!("{} ({})", t("Resourcepack", "Resource pack"), pack_items.len()),
+                        format!("{} ({})", t("Resourcepack", "Resource pack"), pack_count),
                         PickTab::Pack,
                     );
                 }
             });
             ui.add_space(8.0);
 
-            // Entries: (item id, model id, label)
-            let entries: Vec<(String, String, String)> = if tab == PickTab::Pack {
-                let q = query.trim().to_lowercase();
-                pack_items
-                    .iter()
-                    .filter(|(_, m)| q.is_empty() || m.contains(&q))
-                    .map(|(b, m)| (b.clone(), m.clone(), m.clone()))
-                    .collect()
-            } else {
-                let filter = match tab {
-                    PickTab::Items => items::Filter::Items,
-                    PickTab::Blocks => items::Filter::Blocks,
-                    _ => items::Filter::All,
-                };
-                let mut v: Vec<(String, String, String)> = vec![];
-                // Custom models first when searching in a menu.
-                if for_menu && tab == PickTab::All && !query.trim().is_empty() {
-                    let q = query.trim().to_lowercase();
-                    v.extend(
-                        pack_items
-                            .iter()
-                            .filter(|(_, m)| m.contains(&q))
-                            .map(|(b, m)| (b.clone(), m.clone(), m.clone())),
-                    );
-                }
-                v.extend(items::search(&query, filter).into_iter().map(|i| {
-                    (
-                        format!("minecraft:{}", i.id),
-                        String::new(),
-                        i.name.to_string(),
-                    )
-                }));
-                // Newer items that only the texture pack knows.
-                let words: Vec<String> = query
-                    .trim()
-                    .to_lowercase()
-                    .replace("minecraft:", "")
-                    .split([' ', '_'])
-                    .filter(|w| !w.is_empty())
-                    .map(str::to_string)
-                    .collect();
-                v.extend(
-                    extra
-                        .iter()
-                        .filter(|(_, block)| match filter {
-                            items::Filter::Items => !block,
-                            items::Filter::Blocks => *block,
-                            items::Filter::All => true,
-                        })
-                        .filter(|(id, _)| words.iter().all(|w| id.contains(w.as_str())))
-                        .map(|(id, _)| (format!("minecraft:{id}"), String::new(), items::display_name(id))),
-                );
-                v
-            };
+            let entries: &Vec<Entry> = &entries;
             let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
             if enter {
                 if let Some(first) = entries.first() {
