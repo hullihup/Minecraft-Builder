@@ -27,7 +27,18 @@ pub struct MenuItem {
     /// What a click does without any blocks (see `ACTIONS`), and its value.
     pub action: String,
     pub arg: String,
+    /// Which click runs the action: "" / "any", "left", "right", "shift_left", "shift_right".
+    pub button: String,
 }
+
+/// Mouse buttons for the click action: (id, label).
+pub const BUTTONS: &[(&str, (&str, &str))] = &[
+    ("", ("Jeder Klick", "Any click")),
+    ("left", ("Linksklick", "Left click")),
+    ("right", ("Rechtsklick", "Right click")),
+    ("shift_left", ("Shift + Linksklick", "Shift + left click")),
+    ("shift_right", ("Shift + Rechtsklick", "Shift + right click")),
+];
 
 /// Click actions of a slot: (id, label, label of the value or "" if none).
 pub const ACTIONS: &[(&str, (&str, &str), (&str, &str))] = &[
@@ -65,6 +76,7 @@ pub fn parse(text: &str) -> Vec<MenuItem> {
             it.id = p.get(7).map(|x| clean_id(x)).unwrap_or_default();
             it.action = p.get(8).map(|x| x.trim().to_string()).unwrap_or_default();
             it.arg = p.get(9).map(|x| x.to_string()).unwrap_or_default();
+            it.button = p.get(10).map(|x| x.trim().to_string()).unwrap_or_default();
         } else {
             let Some((slot, rest)) = line.split_once(':') else {
                 continue;
@@ -96,7 +108,7 @@ pub fn serialize(items: &[MenuItem]) -> String {
     v.iter()
         .map(|i| {
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 i.slot,
                 clean(&i.item),
                 clean(&i.name),
@@ -106,7 +118,8 @@ pub fn serialize(items: &[MenuItem]) -> String {
                 if i.take { "take" } else { "" },
                 clean_id(&i.id),
                 clean(&i.action),
-                clean(&i.arg)
+                clean(&i.arg),
+                clean(&i.button)
             )
         })
         .collect::<Vec<_>>()
@@ -1135,6 +1148,29 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                                         }
                                     }
                                 });
+                            if !it.action.is_empty() {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(t("Mit", "With")).size(12.0).color(theme::TEXT_WEAK));
+                                    let cur_b = BUTTONS
+                                        .iter()
+                                        .find(|b| b.0 == it.button)
+                                        .copied()
+                                        .unwrap_or(BUTTONS[0]);
+                                    egui::ComboBox::from_id_salt(("menu_button", nid, slot))
+                                        .width(ui.available_width())
+                                        .selected_text(crate::i18n::tl(cur_b.1))
+                                        .show_ui(ui, |ui| {
+                                            for b in BUTTONS {
+                                                if ui
+                                                    .selectable_label(it.button == b.0, crate::i18n::tl(b.1))
+                                                    .clicked()
+                                                {
+                                                    it.button = b.0.to_string();
+                                                }
+                                            }
+                                        });
+                                });
+                            }
                             if !cur.2 .0.is_empty() {
                                 ui.horizontal(|ui| {
                                     ui.add(
@@ -1748,9 +1784,12 @@ mod tests {
             name: "&bMein ".into(),
             lore: "Zeile eins |zwei ".into(),
             amount: 1,
+            action: "close".into(),
+            button: "right".into(),
             ..Default::default()
         }];
         let back = parse(&serialize(&items));
+        assert_eq!(back[0].button, "right");
         assert_eq!(back[0].name, "&bMein ");
         assert_eq!(back[0].lore, "Zeile eins |zwei ");
     }

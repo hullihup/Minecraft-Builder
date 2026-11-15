@@ -297,7 +297,7 @@ __COMMON__
         String baseItems = "";
         /** Slots whose item may be taken out by the player. */
         public final java.util.Set<Integer> takeable = new java.util.HashSet<>();
-        /** Click action per slot from the menu editor: {action, value}. */
+        /** Click action per slot from the menu editor: {action, value, mouse button}. */
         public final java.util.Map<Integer, String[]> actions = new java.util.HashMap<>();
         private Inventory inventory;
 
@@ -345,7 +345,7 @@ __COMMON__
             }
             inv.setItem(slot, is);
             if (e[6].contains("take")) holder.takeable.add(slot);
-            if (!e[8].isEmpty()) holder.actions.put(slot, new String[] { e[8], e[9] });
+            if (!e[8].isEmpty()) holder.actions.put(slot, new String[] { e[8], e[9], e[10] });
         }
         p.openInventory(inv);
     }
@@ -549,7 +549,7 @@ __COMMON__
         };
         if (!(taking && holder.takeable.contains(event.getSlot()))) event.setCancelled(true);
         String[] action = holder.actions.get(event.getSlot());
-        if (action != null && event.getWhoClicked() instanceof Player p) {
+        if (action != null && clickMatches(event.getClick(), action[2]) && event.getWhoClicked() instanceof Player p) {
             // Next tick: opening or closing inventories inside a click event is not allowed.
             Bukkit.getScheduler().runTask(__MAIN__.INSTANCE, () -> runMenuAction(p, action[0], action[1]));
         }
