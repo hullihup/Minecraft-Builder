@@ -925,7 +925,7 @@ fn sidebar_blocks(app: &mut App, ui: &mut Ui) {
                         let c = app.canvas.rect.center();
                         let view = *app.view();
                         let scene = ((c - app.canvas.rect.min) - view.pan) / view.zoom;
-                        app.add_node(d.id, scene.to_pos2());
+                        app.add_node_auto(d.id, scene.to_pos2());
                     }
                 }
             });

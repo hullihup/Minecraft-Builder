@@ -97,6 +97,12 @@ enum NodeEvent {
     OpenMenu(NodeId),
     /// Open the recipe editor.
     OpenRecipe(NodeId),
+    /// Connect a free flow output to this block's flow input.
+    ConnectFlow {
+        from: NodeId,
+        pin: String,
+        to: NodeId,
+    },
     /// Open the commands window for a command block.
     OpenCommand(NodeId),
     /// Open the item search for a text input of a block.
@@ -626,6 +632,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         let res_id = if r.model.is_empty() { r.result.clone() } else { r.model.clone() };
         recipe_prev.insert(nid, (rtype, cells, (res_id, res_tex), r.amount));
     }
+    let free_outputs = app.free_flow_outputs();
     let mut new_sizes = HashMap::new();
     for idx in order {
         let node = &mut app.project.workspaces[ws_idx].nodes[idx];
@@ -912,6 +919,68 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         let label_w = 92.0;
         let edit_w = inner_w - label_w - 8.0;
         let mut changed = false;
+
+        // Problems written right on the block, with a fix for missing flow.
+        let flow_missing = def.has_exec_in() && !connected.contains(&(nid, "in".to_string(), false));
+        if let Some((_, msgs)) = node_problems.get(&nid) {
+            for m in msgs {
+                let is_err = !m.contains("nie ausgeführt") && !m.starts_with("Es gibt kein Menü");
+                let col = if is_err { theme::RED } else { theme::YELLOW };
+                let text = if m.contains("nie ausgeführt") {
+                    t(
+                        "Läuft nie: Zieh den grünen Pfeil ▷ von einem Event oder dem Block davor zum grünen Pfeil links an diesem Block.",
+                        "Never runs: drag the green arrow ▷ from an event or the block before to the green arrow on the left of this block.",
+                    )
+                    .to_string()
+                } else {
+                    m.clone()
+                };
+                egui::Frame::new()
+                    .fill(col.gamma_multiply(0.12))
+                    .inner_margin(egui::Margin::symmetric(PAD_X as i8, 4))
+                    .show(&mut nui, |ui| {
+                        ui.set_width(width - 2.0 * PAD_X);
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(text).size(10.5).color(col))
+                                .wrap()
+                                .selectable(false),
+                        );
+                    });
+            }
+            nui.add_space(2.0);
+        }
+        if flow_missing && def.kind != Kind::Event {
+            let cands: Vec<&(NodeId, String, String)> =
+                free_outputs.iter().filter(|c| c.0 != nid).collect();
+            if !cands.is_empty() {
+                let r = row(&mut nui, |ui| {
+                    let resp = wide_button(
+                        ui,
+                        crate::ui::icons::Icon::Bolt,
+                        t("Mit Ablauf verbinden ▾", "Connect to flow ▾"),
+                        inner_w,
+                    );
+                    egui::Popup::menu(&resp).show(|ui| {
+                        ui.label(
+                            egui::RichText::new(t("Wonach soll dieser Block laufen?", "After what should this block run?"))
+                                .size(11.0)
+                                .color(theme::TEXT_WEAK),
+                        );
+                        for (from, pin, label) in &cands {
+                            if ui.button(label.as_str()).clicked() {
+                                events.push(NodeEvent::ConnectFlow {
+                                    from: *from,
+                                    pin: pin.clone(),
+                                    to: nid,
+                                });
+                                ui.close();
+                            }
+                        }
+                    });
+                });
+                let _ = r;
+            }
+        }
 
         // Fields
         for f in def.fields.iter().filter(|f| !f.advanced) {
@@ -1768,6 +1837,14 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 app.selection.insert(id);
                 app.menu_edit = Some(crate::ui::menu_editor::MenuEdit::new(ws_idx, id));
             }
+            NodeEvent::ConnectFlow { from, pin, to } => {
+                connect(
+                    app.ws_mut(),
+                    PinRef { node: from, pin },
+                    PinRef { node: to, pin: "in".into() },
+                    true,
+                );
+            }
             NodeEvent::OpenRecipe(id) => {
                 app.selection.clear();
                 app.selection.insert(id);
@@ -1888,7 +1965,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     // Drop from the block library.
     if let Some(kind) = bg_resp.dnd_release_payload::<String>() {
         if let Some(p) = pointer {
-            app.add_node(&kind, to_scene * p);
+            app.add_node_auto(&kind, to_scene * p);
         }
     }
 

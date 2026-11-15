@@ -1067,6 +1067,77 @@ impl App {
         id
     }
 
+    /// Exec outputs in the current workspace that nothing is connected to yet:
+    /// (node, pin, label). Events and blocks with "next" first.
+    pub fn free_flow_outputs(&self) -> Vec<(NodeId, String, String)> {
+        let ws = self.ws();
+        let mut out = vec![];
+        for n in &ws.nodes {
+            let Some(shape) = crate::blocks::shape(n, &self.project) else { continue };
+            for o in shape.outputs.iter().filter(|o| o.ty == crate::blocks::PinType::Exec) {
+                if ws.links_from(n.id, &o.id).next().is_some() {
+                    continue;
+                }
+                let mut label = match self.project.node_command(n) {
+                    Some(c) => format!("{} /{}", t("Befehl", "Command"), c.name),
+                    None => crate::i18n::tl(shape.def.name).to_string(),
+                };
+                if o.id != "next" {
+                    label = format!("{label} → {}", o.label.text());
+                }
+                out.push((n.id, o.id.to_string(), format!("{label}  #{}", n.id)));
+            }
+        }
+        out
+    }
+
+    /// Adds a block and, if it has a flow input, connects it to the block that was
+    /// selected before (or the nearest free flow output on its left).
+    pub fn add_node_auto(&mut self, kind: &str, pos: egui::Pos2) -> NodeId {
+        let before: Option<NodeId> = if self.selection.len() == 1 {
+            self.selection.iter().next().copied()
+        } else {
+            None
+        };
+        let id = self.add_node(kind, pos);
+        let Some(def) = crate::blocks::get(kind) else {
+            return id;
+        };
+        if !def.has_exec_in() {
+            return id;
+        }
+        let free = self.free_flow_outputs();
+        let new_pos = self.ws().node(id).map(|n| n.pos).unwrap_or([pos.x, pos.y]);
+        let pick = before
+            .and_then(|b| free.iter().find(|(n, _, _)| *n == b && *n != id))
+            .or_else(|| {
+                // Nearest free output to the left, roughly on the same height.
+                free.iter()
+                    .filter(|(n, _, _)| *n != id)
+                    .filter_map(|f| {
+                        let p = self.ws().node(f.0)?.pos;
+                        let (dx, dy) = (new_pos[0] - p[0], (new_pos[1] - p[1]).abs());
+                        (dx > 40.0 && dx < 900.0 && dy < 260.0).then_some((dx + dy * 2.0, f))
+                    })
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                    .map(|x| x.1)
+            })
+            .cloned();
+        if let Some((from, pin, label)) = pick {
+            ui::canvas::connect(
+                self.ws_mut(),
+                crate::model::PinRef { node: from, pin },
+                crate::model::PinRef { node: id, pin: "in".into() },
+                true,
+            );
+            self.log(
+                Level::Info,
+                format!("Automatisch verbunden: {label} → {}", crate::i18n::tl(def.name)),
+            );
+        }
+        id
+    }
+
     pub fn delete_selection(&mut self) {
         let sel: Vec<NodeId> = self.selection.iter().copied().collect();
         for id in sel {
