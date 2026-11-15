@@ -2257,6 +2257,19 @@ fn build_all() -> Vec<BlockDef> {
             .both("Storage.removeText(\"loc.\" + ${storekey});"),
     );
     v.push(
+        b("loc_list", C::Location, K::Value,
+            ("Gespeicherte Positionen", "Stored locations"),
+            ("Die Namen aller gespeicherten Positionen eines Spielers (oder aller globalen), z. B. „home, mine, farm“ – praktisch für /homes.",
+             "The names of all stored locations of a player (or all global ones), e.g. “home, mine, farm” – handy for /homes."))
+            .f("scope", ("Bereich", "Scope"), F::Choice(SCOPES), "player")
+            .i("player", p_player, T::Player, "")
+            .o("names", ("Namen", "Names"), T::Text)
+            .h(("Alle Namen, mit Komma getrennt (leer, wenn keine).", "All names, separated by commas (empty if none)."))
+            .o("count", ("Anzahl", "Count"), T::Number)
+            .bout("names", "Storage.names(\"loc.\" + (\"${f:scope}\".equals(\"global\") ? \"global\" : Util.uuid(${in:player})) + \".\")")
+            .bout("count", "Storage.count(\"loc.\" + (\"${f:scope}\".equals(\"global\") ? \"global\" : Util.uuid(${in:player})) + \".\")"),
+    );
+    v.push(
         b("look_loc", C::Location, K::Value,
             ("Position im Blick", "Location in sight"),
             ("Der Block, auf den der Spieler schaut. Ist nichts in Reichweite, kommt die Position des Spielers heraus.",
@@ -2327,6 +2340,7 @@ fn build_all() -> Vec<BlockDef> {
             .f("recipe", ("Rezept", "Recipe"), F::Recipe, crate::recipe::DEFAULT)
             .fa("xp", ("Erfahrung", "Experience"), F::Number, "0.1")
             .fa("seconds", ("Brennzeit (Sek.)", "Cooking time (s)"), F::Number, "10")
+            .fa("discover", ("Im Rezeptbuch freischalten (Paper)", "Unlock in recipe book (Paper)"), F::Bool, "true")
             .paper_empty()
             .fabric_empty(),
     );

@@ -19,14 +19,20 @@ pub enum Starter {
     Rewards,
     Protect,
     Sidebar,
+    Homes,
+    HomeMenu,
+    WarpMenu,
 }
 
 impl Starter {
-    pub const ALL: [Starter; 11] = [
+    pub const ALL: [Starter; 14] = [
         Starter::Empty,
         Starter::Welcome,
         Starter::Kit,
         Starter::Home,
+        Starter::Homes,
+        Starter::HomeMenu,
+        Starter::WarpMenu,
         Starter::Shop,
         Starter::Settings,
         Starter::Counter,
@@ -44,7 +50,9 @@ impl Starter {
     }
     pub fn supports(self, p: Platform) -> bool {
         match self {
-            Starter::Shop | Starter::Sidebar => p == Platform::Paper,
+            Starter::Shop | Starter::Sidebar | Starter::HomeMenu | Starter::WarpMenu => {
+                p == Platform::Paper
+            }
             _ => true,
         }
     }
@@ -61,6 +69,9 @@ impl Starter {
             Starter::Rewards => ("Belohnungen", "Rewards"),
             Starter::Protect => ("Spawn-Schutz", "Spawn protection"),
             Starter::Sidebar => ("Scoreboard & Tab-Liste", "Scoreboard & tab list"),
+            Starter::Homes => ("Mehrere Homes", "Several homes"),
+            Starter::HomeMenu => ("Home-Menü", "Home menu"),
+            Starter::WarpMenu => ("Warp-Menü", "Warp menu"),
         }
     }
     pub fn desc(self) -> (&'static str, &'static str) {
@@ -106,6 +117,18 @@ impl Starter {
                 "Zeigt jedem Spieler eine Seitenleiste und Text in der Tab-Liste.",
                 "Shows every player a sidebar and text in the tab list.",
             ),
+            Starter::Homes => (
+                "/sethome, /home, /delhome und /homes mit beliebig vielen Namen pro Spieler.",
+                "/sethome, /home, /delhome and /homes with any number of names per player.",
+            ),
+            Starter::HomeMenu => (
+                "/homemenu: 3 Homes per Klick setzen und hinteleportieren – ganz ohne Kabel.",
+                "/homemenu: set 3 homes and teleport to them by click – no wires at all.",
+            ),
+            Starter::WarpMenu => (
+                "/setwarp für OPs, /warps öffnet ein Menü mit Spawn, Arena und Shop.",
+                "/setwarp for OPs, /warps opens a menu with spawn, arena and shop.",
+            ),
         }
     }
     /// Short tags shown on the template card.
@@ -122,6 +145,9 @@ impl Starter {
             Starter::Rewards => &[("Events", "Events"), ("Items", "Items")],
             Starter::Protect => &[("Positionen", "Locations"), ("Logik", "Logic")],
             Starter::Sidebar => &[("Scoreboard", "Scoreboard")],
+            Starter::Homes => &[("Befehle", "Commands"), ("Positionen", "Locations")],
+            Starter::HomeMenu => &[("Menü", "Menu"), ("Positionen", "Locations")],
+            Starter::WarpMenu => &[("Menü", "Menu"), ("Positionen", "Locations")],
         }
     }
     pub fn icon(self) -> crate::ui::icons::Icon {
@@ -138,6 +164,9 @@ impl Starter {
             Starter::Rewards => I::Star,
             Starter::Protect => I::Pin,
             Starter::Sidebar => I::Layers,
+            Starter::Homes => I::Home,
+            Starter::HomeMenu => I::Chest,
+            Starter::WarpMenu => I::Pin,
         }
     }
     pub fn color(self) -> egui::Color32 {
@@ -147,7 +176,8 @@ impl Starter {
             Starter::Welcome => C::Messages.color(),
             Starter::Counter => C::Data.color(),
             Starter::Kit => C::Events.color(),
-            Starter::Home | Starter::Protect => C::Location.color(),
+            Starter::Home | Starter::Protect | Starter::Homes => C::Location.color(),
+            Starter::HomeMenu | Starter::WarpMenu => C::Player.color(),
             Starter::Shop => C::Player.color(),
             Starter::Settings => C::Files.color(),
             Starter::Wand => C::Resources.color(),
@@ -191,6 +221,37 @@ impl<'a> Builder<'a> {
     }
     fn flow(&mut self, from: NodeId, to: NodeId) {
         self.link(from, "next", to, "in");
+    }
+    /// A command with options and its event block.
+    fn command(
+        &mut self,
+        name: &str,
+        desc: &str,
+        op: bool,
+        options: &[(&str, crate::model::OptType)],
+        x: f32,
+        y: f32,
+    ) -> NodeId {
+        use crate::model::{CmdAccess, CmdOption, CommandDef};
+        let cid = self.p.alloc_id();
+        let mut c = CommandDef::new(cid, name);
+        c.description = desc.into();
+        if op {
+            c.access = CmdAccess::Op;
+        }
+        c.options = options
+            .iter()
+            .map(|(n, ty)| CmdOption {
+                name: n.to_string(),
+                description: String::new(),
+                ty: *ty,
+                required: true,
+                choices: vec![],
+            })
+            .collect();
+        self.p.commands.push(c);
+        let cid_s = cid.to_string();
+        self.node("ev_command", x, y, &[("cmd", cid_s.as_str())])
     }
 }
 
@@ -489,6 +550,104 @@ pub fn new_project(name: &str, platform: Platform, starter: Starter) -> Project 
             b.link(iff, "then", cancel, "in");
             b.flow(cancel, msg);
         }
+        Starter::Homes => {
+            use crate::model::OptType;
+            let set = b.command("sethome", "Speichert ein Home", false, &[("name", OptType::Word)], 32.0, 32.0);
+            let save = b.node("loc_save", 352.0, 32.0, &[]);
+            let fm = b.node("format", 352.0, 288.0, &[("format", "&aHome &e{0}&a gespeichert.")]);
+            let m = b.node("send_message", 672.0, 32.0, &[]);
+            b.link(set, "opt0", save, "key");
+            b.link(set, "opt0", fm, "p0");
+            b.flow(set, save);
+            b.flow(save, m);
+            b.link(fm, "res", m, "text");
+
+            let home = b.command("home", "Teleportiert zu einem Home", false, &[("name", OptType::Word)], 32.0, 560.0);
+            let load = b.node("loc_load", 352.0, 560.0, &[]);
+            let tp = b.node("teleport", 672.0, 560.0, &[]);
+            let ok = b.node("send_message", 992.0, 560.0, &[("text", "&aWillkommen zu Hause!")]);
+            let no = b.node("send_message", 672.0, 800.0, &[("text", "&cDieses Home gibt es nicht. &7/homes zeigt deine Homes.")]);
+            b.link(home, "opt0", load, "key");
+            b.flow(home, load);
+            b.link(load, "found", tp, "in");
+            b.link(load, "loc", tp, "loc");
+            b.flow(tp, ok);
+            b.link(load, "missing", no, "in");
+
+            let del = b.command("delhome", "Löscht ein Home", false, &[("name", OptType::Word)], 32.0, 1060.0);
+            let rm = b.node("loc_delete", 352.0, 1060.0, &[]);
+            let dm = b.node("send_message", 672.0, 1060.0, &[("text", "&7Home gelöscht.")]);
+            b.link(del, "opt0", rm, "key");
+            b.flow(del, rm);
+            b.flow(rm, dm);
+
+            let list = b.command("homes", "Zeigt deine Homes", false, &[], 32.0, 1340.0);
+            let names = b.node("loc_list", 32.0, 1560.0, &[]);
+            let lf = b.node("format", 352.0, 1560.0, &[("format", "&aDeine Homes &7({1})&a: &f{0}")]);
+            let lm = b.node("send_message", 352.0, 1340.0, &[]);
+            b.link(names, "names", lf, "p0");
+            b.link(names, "count", lf, "p1");
+            b.link(lf, "res", lm, "text");
+            b.flow(list, lm);
+        }
+        Starter::HomeMenu => {
+            let cmd = b.command("homemenu", "Öffnet dein Home-Menü", false, &[], 32.0, 32.0);
+            let mut items = vec![];
+            for (i, (slot_set, slot_tp)) in [(2, 20), (4, 22), (6, 24)].iter().enumerate() {
+                let n = i + 1;
+                items.push(format!(
+                    "{slot_set}\tminecraft:red_bed\t&aHome {n} setzen\t&7Speichert, wo du gerade stehst\t1\t\t\t\tsave_loc\thome{n}"
+                ));
+                items.push(format!(
+                    "{slot_tp}\tminecraft:ender_pearl\t&bZu Home {n}\t&7Teleportiert dich zu Home {n}\t1\t\t\t\ttp_loc\thome{n}"
+                ));
+            }
+            items.push("13\tminecraft:compass\t&eDeine Homes\t&7Oben setzen|&7Unten hinteleportieren\t1\t\t\t\t\t".into());
+            items.push("26\tminecraft:barrier\t&cSchließen\t\t1\t\t\t\tclose\t".into());
+            let items = items.join("\n");
+            let menu = b.node(
+                "open_menu",
+                352.0,
+                32.0,
+                &[("menu", "homes"), ("title", "&8Deine Homes"), ("rows", "3"), ("items", items.as_str())],
+            );
+            b.flow(cmd, menu);
+            let id = b.p.alloc_id();
+            b.p.workspaces[0].notes.push(crate::model::Note {
+                id,
+                pos: [8.0, -80.0],
+                size: [700.0, 80.0],
+                title: "Ganz ohne Kabel".into(),
+                text: "Was ein Klick macht, steht im Menü-Editor bei jedem Platz unter „Beim Klick“.".into(),
+                color: 1,
+            });
+        }
+        Starter::WarpMenu => {
+            use crate::model::OptType;
+            let set = b.command("setwarp", "Setzt einen Warp (nur OPs)", true, &[("name", OptType::Word)], 32.0, 32.0);
+            let save = b.node("loc_save", 352.0, 32.0, &[("scope", "global")]);
+            let fm = b.node("format", 352.0, 288.0, &[("format", "&aWarp &e{0}&a gesetzt.")]);
+            let m = b.node("send_message", 672.0, 32.0, &[]);
+            b.link(set, "opt0", save, "key");
+            b.link(set, "opt0", fm, "p0");
+            b.flow(set, save);
+            b.flow(save, m);
+            b.link(fm, "res", m, "text");
+            let open = b.command("warps", "Öffnet das Warp-Menü", false, &[], 32.0, 560.0);
+            let items = [
+                "11\tminecraft:compass\t&bSpawn\t&7/setwarp spawn\t1\t\t\t\ttp_warp\tspawn",
+                "13\tminecraft:diamond_sword\t&cArena\t&7/setwarp arena\t1\t\t\t\ttp_warp\tarena",
+                "15\tminecraft:emerald\t&aShop\t&7/setwarp shop\t1\t\t\t\ttp_warp\tshop",
+            ]
+            .join("\n");
+            let menu = b.node(
+                "open_menu",
+                352.0,
+                560.0,
+                &[("menu", "warps"), ("title", "&8Warps"), ("rows", "3"), ("items", items.as_str())],
+            );
+            b.flow(open, menu);
+        }
         Starter::Sidebar => {
             let j = b.node("ev_join", 32.0, 32.0, &[]);
             let cnt = b.node("online_count", 32.0, 320.0, &[]);
@@ -541,6 +700,8 @@ pub fn all_blocks_project(platform: Platform) -> Project {
         enabled: true,
     }];
     p.settings.pack.give_command = "testitems".into();
+    // Debug messages on, so CI compiles that code too.
+    p.settings.debug = true;
     p.workspaces = vec![Workspace::new("Test")];
     let mut b = Builder { p: &mut p, ws: 0 };
     let defs: Vec<_> = blocks::all()

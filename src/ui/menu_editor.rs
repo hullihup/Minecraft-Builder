@@ -211,11 +211,15 @@ fn add_page(app: &mut App, ws: usize, nid: NodeId) {
     };
     let last = rows * 9 - 1;
     let first_of_last_row = (rows - 1) * 9;
-    // Arrow "next page" in the bottom right of the current menu.
+    // Arrow "next page": the rightmost free slot of the bottom row (bottom right if all are used).
     let mut list = parse(node.values.get("items").map(|s| s.as_str()).unwrap_or(default_items));
-    list.retain(|i| i.slot != last);
+    let next_slot = (first_of_last_row..=last)
+        .rev()
+        .find(|s| !list.iter().any(|i| i.slot == *s))
+        .unwrap_or(last);
+    list.retain(|i| i.slot != next_slot);
     list.push(MenuItem {
-        slot: last,
+        slot: next_slot,
         item: "minecraft:arrow".into(),
         name: "&eNächste Seite".into(),
         amount: 1,
@@ -905,6 +909,10 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
 
                 ui.add_space(18.0);
                 // ----------------------------------------------- settings
+                egui::ScrollArea::vertical()
+                    .id_salt("menu_settings_scroll")
+                    .max_height((ctx.content_rect().height() - 230.0).clamp(300.0, 620.0))
+                    .show(ui, |ui| {
                 ui.vertical(|ui| {
                     ui.set_width(330.0);
                     crate::ui::widgets::section_header(ui, t("Menü", "Menu"));
@@ -1253,6 +1261,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         }
                     }
                 });
+                    });
             });
             ui.add_space(10.0);
             ui.horizontal(|ui| {

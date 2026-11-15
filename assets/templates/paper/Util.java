@@ -370,8 +370,16 @@ __COMMON__
     }
 
     /** Adds a recipe from the "Recipe" block. grid: 9 slots (shaped/shapeless) or the one input. */
-    public static void addRecipe(String key, String type, String[] grid, ItemStack result, double xp, double seconds) {
+    /** Recipes that players get in their recipe book. */
+    static final List<NamespacedKey> DISCOVER = new ArrayList<>();
+
+    public static void discoverRecipes(Player p) {
+        if (!DISCOVER.isEmpty()) p.discoverRecipes(DISCOVER);
+    }
+
+    public static void addRecipe(String key, String type, String[] grid, ItemStack result, double xp, double seconds, boolean discover) {
         NamespacedKey k = new NamespacedKey(__MAIN__.INSTANCE, key);
+        if (discover && !DISCOVER.contains(k)) DISCOVER.add(k);
         Bukkit.removeRecipe(k);
         int ticks = Math.max(1, (int) Math.round(seconds * 20));
         Material first = null;

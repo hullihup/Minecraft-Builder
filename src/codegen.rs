@@ -1104,6 +1104,11 @@ fn gen_workspace(g: &mut Gen, parts: &mut Parts, seen_cmds: &mut HashMap<String,
         parts.recipes.insert(d.id.clone(), n.id);
         match g.p {
             Platform::Paper => {
+                if parts.recipes.len() == 1 {
+                    // Recipe book: for players who join, and (next tick, after all recipes) for those online.
+                    parts.members.push("@org.bukkit.event.EventHandler\npublic void onRecipeJoin(final org.bukkit.event.player.PlayerJoinEvent event) {\n    Util.discoverRecipes(event.getPlayer());\n}".into());
+                    parts.init.push("getServer().getScheduler().runTask(this, () -> getServer().getOnlinePlayers().forEach(Util::discoverRecipes));".into());
+                }
                 parts.init.push(format!("// Rezept „{}“ (#{})", d.id, n.id));
                 parts.init.push(crate::recipe::paper_code(&d));
             }

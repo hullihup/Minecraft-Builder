@@ -151,9 +151,14 @@ pub fn start(app: &mut App, ws: usize, node: Option<NodeId>, now: f64) {
             reached.insert(s.node);
         }
     }
+    let opened = crate::ui::menu_editor::opened_by_actions(&app.project);
     let never: Vec<String> = w
         .nodes
         .iter()
+        .filter(|n| {
+            !(n.kind == "open_menu"
+                && opened.contains(n.values.get("menu").map(|s| s.as_str()).unwrap_or("shop")))
+        })
         .filter(|n| {
             blocks::get(&n.kind)
                 .map(|d| matches!(d.kind, Kind::Action | Kind::Flow))

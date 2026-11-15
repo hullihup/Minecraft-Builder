@@ -108,6 +108,8 @@ pub struct Def {
     pub recipe: Recipe,
     pub xp: f64,
     pub seconds: f64,
+    /// Paper: players get the recipe in their recipe book.
+    pub discover: bool,
 }
 
 pub fn from_node(node: &Node) -> Def {
@@ -130,6 +132,7 @@ pub fn from_node(node: &Node) -> Def {
         recipe: parse(&get("recipe", DEFAULT)),
         xp: num("xp", 0.1).max(0.0),
         seconds: num("seconds", 10.0).max(0.05),
+        discover: get("discover", "true") == "true",
         rtype,
     }
 }
@@ -183,7 +186,7 @@ pub fn paper_code(d: &Def) -> String {
             .collect()
     };
     format!(
-        "Util.addRecipe({}, {}, new String[] {{ {} }}, Util.customItem({}, {}, {}, {}, {}), {}, {});",
+        "Util.addRecipe({}, {}, new String[] {{ {} }}, Util.customItem({}, {}, {}, {}, {}), {}, {}, {});",
         js(&d.id),
         js(&d.rtype),
         grid.join(", "),
@@ -193,7 +196,8 @@ pub fn paper_code(d: &Def) -> String {
         js(&r.name),
         js(&r.lore),
         d.xp,
-        d.seconds
+        d.seconds,
+        d.discover
     )
 }
 
@@ -342,6 +346,7 @@ mod tests {
             recipe: parse(text),
             xp: 0.5,
             seconds: 10.0,
+            discover: true,
         }
     }
 

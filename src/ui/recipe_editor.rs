@@ -311,6 +311,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     recipe: r.clone(),
                     xp: 0.0,
                     seconds: 1.0,
+                    discover: true,
                 };
                 match recipe::problem(&d) {
                     Some(p) => ui.label(RichText::new(p).color(theme::YELLOW).size(12.0)),
