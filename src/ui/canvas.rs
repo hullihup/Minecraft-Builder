@@ -15,6 +15,8 @@ use std::collections::{HashMap, HashSet};
 
 pub const GRID: f32 = 16.0;
 const HEADER_H: f32 = 34.0;
+/// Below this zoom blocks are drawn simplified.
+const LOD_ZOOM: f32 = 0.5;
 const ROW_H: f32 = 24.0;
 const PAD_X: f32 = 12.0;
 
@@ -42,6 +44,9 @@ pub struct CanvasState {
     pub sizes: HashMap<NodeId, Vec2>,
     /// Pin positions of this frame: (node, pin, is_output) -> (scene pos, type).
     pub pins: HashMap<(NodeId, String, bool), (Pos2, PinType)>,
+    /// Pin positions relative to the node, from the last time it was drawn. Blocks
+    /// outside the screen are not drawn; their pins come from here.
+    pub pin_offsets: HashMap<NodeId, Vec<(String, bool, Vec2, PinType)>>,
     pub link_drag: Option<LinkDrag>,
     pub box_start: Option<Pos2>,
     /// Note being moved, with the nodes inside it.
@@ -60,6 +65,7 @@ impl Default for CanvasState {
         Self {
             sizes: HashMap::new(),
             pins: HashMap::new(),
+            pin_offsets: HashMap::new(),
             link_drag: None,
             box_start: None,
             note_drag: None,
@@ -639,6 +645,8 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     let free_outputs = app.free_flow_outputs();
     let lit = crate::ui::trace::lit(app, ctx.input(|i| i.time));
     let mut new_sizes = HashMap::new();
+    // Visible part of the scene (with a margin for shadows and pins).
+    let visible = (to_scene * rect).expand(120.0);
     for idx in order {
         let node = &mut app.project.workspaces[ws_idx].nodes[idx];
         let Some(def) = blocks::get(&node.kind) else {
@@ -678,6 +686,84 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             .copied()
             .unwrap_or(vec2(width, 80.0));
         let node_rect_prev = Rect::from_min_size(pos, prev_size);
+
+        // Outside the screen: skip all drawing and widgets, keep pins and size.
+        if !selected && app.canvas.sizes.contains_key(&node.id) && !visible.intersects(node_rect_prev) {
+            if let Some(offs) = app.canvas.pin_offsets.get(&node.id) {
+                for (pin, out, off, ty) in offs {
+                    app.canvas.pins.insert((node.id, pin.clone(), *out), (pos + *off, *ty));
+                }
+                new_sizes.insert(node.id, prev_size);
+                continue;
+            }
+        }
+        // Far zoomed out: a simple box (header, title, pins) instead of all fields –
+        // the text would be unreadable anyway and drawing it costs most of the frame.
+        if view.zoom < LOD_ZOOM && !selected && app.canvas.sizes.contains_key(&node.id) {
+            if let Some(offs) = app.canvas.pin_offsets.get(&node.id) {
+                let r = node_rect_prev;
+                let cat = def.cat.color();
+                let hrect = Rect::from_min_size(r.min, vec2(r.width(), HEADER_H));
+                let problem = node_problems.get(&node.id);
+                let border = if lit.contains_key(&node.id) {
+                    Stroke::new(3.0, theme::GREEN)
+                } else if let Some((true, _)) = problem {
+                    Stroke::new(3.0, theme::RED)
+                } else if let Some((false, _)) = problem {
+                    Stroke::new(2.0, theme::YELLOW.gamma_multiply(0.8))
+                } else {
+                    Stroke::new(1.0, theme::NODE_BORDER)
+                };
+                let p = sui.painter();
+                p.rect_filled(r, CornerRadius::same(8), theme::NODE_BG);
+                p.rect_filled(
+                    hrect,
+                    CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 },
+                    blend(theme::NODE_HEADER, cat, 0.35),
+                );
+                p.rect_filled(
+                    Rect::from_min_max(hrect.left_top(), pos2(hrect.left() + 6.0, hrect.bottom())),
+                    CornerRadius { nw: 8, ne: 0, sw: 0, se: 0 },
+                    cat,
+                );
+                if view.zoom >= 0.3 {
+                    let name = match cmd_info.get(&node.id) {
+                        Some((title, _)) => title.clone(),
+                        None => tl(def.name).to_string(),
+                    };
+                    p.text(
+                        hrect.left_center() + vec2(14.0, 0.0),
+                        egui::Align2::LEFT_CENTER,
+                        name,
+                        FontId::proportional(20.0),
+                        theme::TEXT,
+                    );
+                }
+                p.rect_stroke(r, CornerRadius::same(8), border, StrokeKind::Inside);
+                for (pin, out, off, ty) in offs {
+                    let pp = pos + *off;
+                    p.circle_filled(pp, 7.0, if *ty == PinType::Exec { theme::GREEN } else { ty.color() });
+                    app.canvas.pins.insert((node.id, pin.clone(), *out), (pp, *ty));
+                }
+                let body = sui.interact(r, Id::unique(("node", node.id)), Sense::click_and_drag());
+                if body.clicked() || body.drag_started() {
+                    let add = ctx.input(|i| i.modifiers.command || i.modifiers.shift);
+                    events.push(NodeEvent::Select { id: node.id, add });
+                }
+                if body.dragged_by(egui::PointerButton::Primary) {
+                    events.push(NodeEvent::Drag {
+                        id: node.id,
+                        delta: body.drag_delta(),
+                    });
+                }
+                if body.drag_stopped() {
+                    events.push(NodeEvent::DragStop);
+                }
+                new_sizes.insert(node.id, prev_size);
+                continue;
+            }
+        }
+        let mut my_offsets: Vec<(String, bool, Vec2, PinType)> = vec![];
 
         // Body interaction is registered first so widgets inside win.
         let body = sui.interact(
@@ -1614,8 +1700,10 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     pr.on_hover_ui(|ui| pin_tooltip(ui, def, pd, is_out, is_conn));
                 }
             }
+            my_offsets.push((pin.clone(), is_out, p - pos, ty));
             app.canvas.pins.insert((nid, pin, is_out), (p, ty));
         }
+        app.canvas.pin_offsets.insert(nid, my_offsets);
         let _ = changed;
     }
     app.canvas.sizes = new_sizes;
@@ -1678,6 +1766,10 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 .get(&(l.from.node, l.from.pin.clone(), true));
             let b = app.canvas.pins.get(&(l.to.node, l.to.pin.clone(), false));
             if let (Some((pa, ta)), Some((pb, _))) = (a, b) {
+                // Wires completely outside the screen are not drawn.
+                if !Rect::from_two_pos(*pa, *pb).expand2(vec2(230.0, 20.0)).intersects(visible) {
+                    continue;
+                }
                 let sel = app.canvas.selected_link.as_ref() == Some(l);
                 let hov = hovered_link.as_ref() == Some(l);
                 let hl = sel

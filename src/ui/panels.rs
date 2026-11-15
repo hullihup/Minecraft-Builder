@@ -1773,8 +1773,17 @@ fn code_view(app: &mut App, ui: &mut Ui) {
     egui::ScrollArea::both()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            let job = java_highlight(&app.code_preview);
-            ui.add(egui::Label::new(job).selectable(true).extend());
+            // Highlighting and laying out thousands of lines is only redone when the code changes.
+            let ppp = ui.ctx().pixels_per_point();
+            let fresh = matches!(&app.code_galley, Some((c, p, _)) if *c == app.code_preview && *p == ppp);
+            if !fresh {
+                let job = java_highlight(&app.code_preview);
+                let g = ui.fonts_mut(|f| f.layout_job(job));
+                app.code_galley = Some((app.code_preview.clone(), ppp, g));
+            }
+            if let Some((_, _, g)) = &app.code_galley {
+                ui.add(egui::Label::new(g.clone()).selectable(true).extend());
+            }
         });
 }
 
@@ -1998,11 +2007,13 @@ fn server_console(app: &mut App, ui: &mut Ui) {
                 .max_height(h)
                 .auto_shrink([false, false])
                 .stick_to_bottom(true)
-                .show(ui, |ui| {
+                // Only the visible lines are laid out.
+                .show_rows(ui, 16.0, sc.text.lines().count().max(1), |ui, range| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
                     if sc.text.is_empty() {
                         ui.label(RichText::new(t("Lade Konsole…", "Loading console…")).color(theme::TEXT_WEAK));
                     }
-                    for line in sc.text.lines() {
+                    for line in sc.text.lines().skip(range.start).take(range.len()) {
                         let col = if line.contains("ERROR") || line.contains("Exception") || line.trim_start().starts_with("at ") {
                             theme::RED
                         } else if line.contains("WARN") {
@@ -2012,7 +2023,11 @@ fn server_console(app: &mut App, ui: &mut Ui) {
                         } else {
                             theme::TEXT
                         };
-                        ui.label(RichText::new(line).monospace().size(12.0).color(col));
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), 16.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| ui.add(egui::Label::new(RichText::new(line).monospace().size(12.0).color(col)).truncate()),
+                        );
                     }
                 });
         });

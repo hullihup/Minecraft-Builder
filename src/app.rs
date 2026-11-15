@@ -287,7 +287,11 @@ pub struct App {
     pub console_search: String,
     pub problems: Vec<Problem>,
     pub code_preview: String,
+    /// Highlighted code preview, laid out once: (code, pixels per point, text).
+    pub code_galley: Option<(String, f32, std::sync::Arc<egui::Galley>)>,
     gen_for: Option<Project>,
+    /// Code generation running in the background: (project it is for, result).
+    gen_job: Option<std::sync::mpsc::Receiver<(Project, codegen::Output)>>,
     pub palette: Option<Palette>,
     pub dialog: Dialog,
     pub job: Option<Job>,
@@ -374,7 +378,9 @@ impl App {
             console_search: String::new(),
             problems: vec![],
             code_preview: String::new(),
+            code_galley: None,
             gen_for: None,
+            gen_job: None,
             palette: None,
             dialog: Dialog::None,
             job: None,
@@ -482,6 +488,7 @@ impl App {
         self.selection.clear();
         self.selected_note = None;
         self.gen_for = None;
+        self.gen_job = None;
         self.palette = None;
         self.canvas.fit_request = true;
         self.screen = Screen::Editor;
@@ -1620,14 +1627,37 @@ impl App {
     }
 
     /// Re-runs the code generator when the project changed (for problems + preview).
-    fn refresh_generated(&mut self) {
+    /// Problems and the code preview are made in the background, so typing and
+    /// dragging never wait for the code generator.
+    fn refresh_generated(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = &self.gen_job {
+            match rx.try_recv() {
+                Ok((p, out)) => {
+                    self.problems = out.problems;
+                    self.code_preview = out.main_java;
+                    self.gen_for = Some(p);
+                    self.gen_job = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                Err(_) => self.gen_job = None,
+            }
+        }
         if self.gen_for.as_ref() == Some(&self.project) {
             return;
         }
-        let out = codegen::generate(&self.project);
-        self.problems = out.problems;
-        self.code_preview = out.main_java;
-        self.gen_for = Some(self.project.clone());
+        // While a block is dragged its position changes every frame: wait for the drop.
+        if self.gen_for.is_some() && ctx.input(|i| i.pointer.any_down()) {
+            return;
+        }
+        let p = self.project.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let out = codegen::generate(&p);
+            let _ = tx.send((p, out));
+            ctx.request_repaint();
+        });
+        self.gen_job = Some(rx);
     }
 
     // ------------------------------------------------------------ shortcuts
@@ -1768,28 +1798,44 @@ impl eframe::App for App {
             return;
         }
 
+        let prof = std::env::var_os("MCB_PROFILE").is_some();
+        let mut tk = std::time::Instant::now();
+        let mut lap = |name: &'static str| {
+            if prof {
+                let e = tk.elapsed().as_secs_f64() * 1000.0;
+                PROF.with(|p| p.borrow_mut().add(name, e));
+                tk = std::time::Instant::now();
+            }
+        };
         self.shortcuts(&ctx);
         ui::menu_editor::publish_ids(&self.project);
-        self.refresh_generated();
+        lap("publish_ids");
+        self.refresh_generated(&ctx);
+        lap("codegen");
         self.refresh_pack(false);
-
+        lap("pack");
         ui::panels::top_bar(self, ui);
         ui::panels::status_bar(self, ui);
         ui::panels::activity_bar(self, ui);
+        lap("bars");
         if self.show_sidebar {
             ui::panels::sidebar(self, ui);
         }
+        lap("sidebar");
         if self.show_right {
             ui::panels::right_panel(self, ui);
         }
+        lap("right");
         if self.show_bottom {
             ui::panels::bottom_panel(self, ui);
         }
+        lap("bottom");
         egui::CentralPanel::no_frame().show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             ui::panels::tabs(self, ui);
             ui::canvas::show(self, ui);
         });
+        lap("canvas");
         ui::panels::drop_zones(self, &ctx);
         ui::dialogs::show(self, &ctx);
         if self.show_commands {
@@ -1802,9 +1848,16 @@ impl eframe::App for App {
         ui::menu_editor::item_picker(self, &ctx);
         ui::onboarding::show(self, &ctx);
         ui::onboarding::tutorial(self, &ctx);
-
+        lap("windows");
         self.commit_undo(&ctx);
         self.update_title(&ctx);
+        lap("undo+title");
+        if prof {
+            if let Some(cpu) = _frame.info().cpu_usage {
+                PROF.with(|p| p.borrow_mut().add("CPU incl. tessellation (prev)", cpu as f64 * 1000.0));
+            }
+            PROF.with(|p| p.borrow_mut().frame());
+        }
         let setup_running = self
             .setup
             .as_ref()
@@ -1829,6 +1882,43 @@ impl Drop for App {
             if self.settings.auto_update {
                 let _ = crate::update::run_installer(&p, false);
             }
+        }
+    }
+}
+
+thread_local! {
+    static PROF: std::cell::RefCell<Prof> = std::cell::RefCell::new(Prof::default());
+}
+
+/// Frame timing per part of the UI (MCB_PROFILE=1), printed every 120 frames.
+#[derive(Default)]
+struct Prof {
+    sums: Vec<(&'static str, f64, f64)>,
+    frames: u32,
+}
+
+impl Prof {
+    fn add(&mut self, name: &'static str, ms: f64) {
+        match self.sums.iter_mut().find(|s| s.0 == name) {
+            Some(s) => {
+                s.1 += ms;
+                s.2 = s.2.max(ms);
+            }
+            None => self.sums.push((name, ms, ms)),
+        }
+    }
+    fn frame(&mut self) {
+        self.frames += 1;
+        if self.frames >= 120 {
+            let total: f64 = self.sums.iter().filter(|s| !s.0.starts_with("CPU")).map(|s| s.1).sum::<f64>() / self.frames as f64;
+            let parts: Vec<String> = self
+                .sums
+                .iter()
+                .map(|(n, sum, max)| format!("{n} {:.2}/{:.1}", sum / self.frames as f64, max))
+                .collect();
+            eprintln!("frame {total:.2} ms avg | {}", parts.join(" | "));
+            self.sums.clear();
+            self.frames = 0;
         }
     }
 }

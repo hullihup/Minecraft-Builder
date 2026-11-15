@@ -81,6 +81,12 @@ fn main() -> eframe::Result<()> {
             }
         }
     }
+    // minecraft-builder --selftest-project <paper|fabric> <file.mcb>: the self-test project as file (for tests).
+    if args.len() >= 4 && args[1] == "--selftest-project" {
+        let platform = if args[2] == "fabric" { model::Platform::Fabric } else { model::Platform::Paper };
+        let p = examples::all_blocks_project(platform);
+        std::process::exit(if p.save(std::path::Path::new(&args[3])).is_ok() { 0 } else { 2 });
+    }
     if args.len() >= 4 && (args[1] == "--export" || args[1] == "--selftest") {
         let project = if args[1] == "--export" {
             match model::Project::load(std::path::Path::new(&args[2])) {

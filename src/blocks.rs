@@ -3094,7 +3094,16 @@ pub fn shape(node: &crate::model::Node, project: &crate::model::Project) -> Opti
 }
 
 pub fn get(id: &str) -> Option<&'static BlockDef> {
-    all().iter().find(|b| b.id == id)
+    // Called for every block many times per frame: a hash lookup instead of a scan.
+    static INDEX: OnceLock<std::collections::HashMap<&'static str, usize>> = OnceLock::new();
+    let index = INDEX.get_or_init(|| {
+        let mut m = std::collections::HashMap::new();
+        for (i, b) in all().iter().enumerate() {
+            m.entry(b.id).or_insert(i);
+        }
+        m
+    });
+    index.get(id).map(|i| &all()[*i])
 }
 
 

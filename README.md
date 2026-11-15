@@ -136,6 +136,9 @@ minecraft-builder --selftest paper|fabric ausgabe/  # Testprojekt mit allen Blö
 minecraft-builder --setup-tools                     # Java & Gradle einrichten (nutzt der Installer)
 minecraft-builder --lang de|en                      # Sprache setzen (nutzt der Installer)
 minecraft-builder --render-item pack.zip ausgabe/ stone chest   # Item-Bilder als PNG
+minecraft-builder --selftest-project paper test.mcb  # Testprojekt mit allen Blöcken als .mcb (Lasttest)
 ```
+
+Mit der Umgebungsvariable `MCB_PROFILE=1` schreibt der Builder alle 120 Bilder auf, wie viele Millisekunden jeder Teil der Oberfläche braucht (zum Finden von Rucklern).
 
 Nicht offiziell von Mojang oder Microsoft. Die Item-Liste (`assets/items.txt`) stammt aus dem offenen Projekt [minecraft-data](https://github.com/PrismarineJS/minecraft-data) (MIT-Lizenz). Die Oberfläche ist von node-basierten Bot-Buildern wie XC Circuit inspiriert, der Code ist eigenständig.
