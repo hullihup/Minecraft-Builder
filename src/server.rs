@@ -407,6 +407,70 @@ pub fn deploy(
     Ok(log)
 }
 
+fn server_base(cfg: &ServerConfig) -> String {
+    format!(
+        "{}/api/client/servers/{}",
+        normalize_url(&cfg.url),
+        cfg.server_uuid
+    )
+}
+
+/// The last lines of the server console.
+pub fn fetch_logs(cfg: &ServerConfig, lines: u32) -> Result<String, String> {
+    let mut resp = agent(20)
+        .get(&format!("{}/logs?lines={}", server_base(cfg), lines.clamp(1, 1000)))
+        .header("Authorization", &format!("Bearer {}", cfg.api_key.trim()))
+        .call()
+        .map_err(net_err)?;
+    let status = resp.status().as_u16();
+    let body = resp.body_mut().read_to_string().unwrap_or_default();
+    if !(200..300).contains(&status) {
+        return Err(explain(status, &body));
+    }
+    Ok(body)
+}
+
+/// Sends a console command to the server.
+pub fn send_command(cfg: &ServerConfig, command: &str) -> Result<(), String> {
+    post(
+        &format!("{}/command", server_base(cfg)),
+        cfg.api_key.trim(),
+        &serde_json::json!({ "command": command.trim().trim_start_matches('/') }),
+    )
+}
+
+/// start / stop / restart / kill
+pub fn power(cfg: &ServerConfig, action: &str) -> Result<(), String> {
+    post(
+        &format!("{}/power", server_base(cfg)),
+        cfg.api_key.trim(),
+        &serde_json::json!({ "action": action }),
+    )
+}
+
+/// Removes ANSI color sequences from console output.
+pub fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for n in chars.by_ref() {
+                    if n.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        if c != '\r' {
+            out.push(c);
+        }
+    }
+    out
+}
+
 fn urlencode(s: &str) -> String {
     let mut o = String::new();
     for b in s.bytes() {
@@ -505,6 +569,8 @@ mod tests {
                     (200, r#"{"user":{"username":"steve"}}"#.to_string())
                 } else if path.starts_with("/api/client/servers?") {
                     (200, r#"{"servers":{"total":1,"per_page":50,"page":1,"data":[{"uuid":"1111-2222","uuid_short":"1111","name":"Survival","description":null,"node_name":"node1"}]}}"#.to_string())
+                } else if path.contains("/logs?lines=") {
+                    (200, "[12:00:00 INFO]: \u{1b}[32mDone\u{1b}[0m (1.2s)!\r\n[12:00:01 WARN]: x".to_string())
                 } else if path.contains("/files/list") {
                     (200, r#"{"entries":{"total":2,"data":[{"name":"meinplugin-0.9.jar"},{"name":"anderes.jar"}]}}"#.to_string())
                 } else if path.ends_with("/files/upload") {
@@ -540,6 +606,26 @@ mod tests {
         let err = check_account(&base, "falsch").unwrap_err();
         assert!(err.contains("401"), "{err}");
         h.join().unwrap();
+    }
+
+    #[test]
+    fn reads_the_console_and_sends_commands() {
+        let (base, h) = mock_panel(3);
+        let cfg = ServerConfig {
+            id: 1,
+            url: base,
+            api_key: format!("c7sp_{}", "k".repeat(43)),
+            server_uuid: "1111-2222".into(),
+            ..Default::default()
+        };
+        let log = strip_ansi(&fetch_logs(&cfg, 200).unwrap());
+        assert_eq!(log, "[12:00:00 INFO]: Done (1.2s)!\n[12:00:01 WARN]: x");
+        send_command(&cfg, "/say hi").unwrap();
+        power(&cfg, "restart").unwrap();
+        let seen = h.join().unwrap();
+        assert!(seen[0].0.starts_with("GET /api/client/servers/1111-2222/logs?lines=200"));
+        assert!(String::from_utf8_lossy(&seen[1].2).contains("\"command\":\"say hi\""));
+        assert!(String::from_utf8_lossy(&seen[2].2).contains("restart"));
     }
 
     #[test]

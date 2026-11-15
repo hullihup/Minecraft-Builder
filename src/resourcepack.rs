@@ -24,6 +24,19 @@ pub fn set_known_models(m: Vec<String>) {
     }
 }
 
+/// Sound ids of the project's pack (from sounds.json), for the sound picker.
+static SOUNDS: RwLock<Vec<String>> = RwLock::new(Vec::new());
+
+pub fn set_known_sounds(s: Vec<String>) {
+    if let Ok(mut w) = SOUNDS.write() {
+        *w = s;
+    }
+}
+
+pub fn known_sounds() -> Vec<String> {
+    SOUNDS.read().map(|m| m.clone()).unwrap_or_default()
+}
+
 pub fn known_models() -> Vec<String> {
     MODELS.read().map(|m| m.clone()).unwrap_or_default()
 }
@@ -72,6 +85,8 @@ pub struct PackInfo {
     /// Files that were merged instead of replaced (lang, sounds, ...).
     pub merged: Vec<String>,
     pub packs: Vec<PackStat>,
+    /// Custom sounds of the pack (`namespace:name` from sounds.json).
+    pub sounds: Vec<String>,
     /// Texture entry -> index of the pack it comes from.
     pub source: BTreeMap<String, usize>,
 }
@@ -527,6 +542,14 @@ pub fn inspect(
             };
         }
     }
+    for (name, data) in &entries {
+        let Some(rest) = name.strip_prefix("assets/") else { continue };
+        let Some((ns, "sounds.json")) = rest.split_once('/') else { continue };
+        if let Ok(serde_json::Value::Object(m)) = serde_json::from_slice::<serde_json::Value>(data) {
+            info.sounds.extend(m.keys().map(|k| format!("{ns}:{k}")));
+        }
+    }
+    info.sounds.sort();
     let raw = raw_items(&entries);
     let raw_tex: BTreeMap<String, Option<String>> = raw
         .keys()

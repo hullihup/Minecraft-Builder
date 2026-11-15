@@ -215,6 +215,14 @@ fn menus(app: &mut App, ui: &mut Ui) {
         }
     });
     ui.menu_button(t("Bearbeiten", "Edit"), |ui| {
+        if ui.button(t("Suchen & Ersetzen…", "Search & replace…")).clicked() {
+            app.dialog = crate::app::Dialog::Replace {
+                find: String::new(),
+                with: String::new(),
+            };
+            ui.close();
+        }
+        ui.separator();
         if ui
             .add_enabled(
                 app.can_undo(),
@@ -1786,6 +1794,7 @@ pub fn bottom_panel(app: &mut App, ui: &mut Ui) {
                 &[
                     (BottomTab::Console, Icon::Keyboard, &cons_label),
                     (BottomTab::Problems, Icon::Warning, &probs_label),
+                    (BottomTab::Server, Icon::Server, t("Server-Konsole", "Server console")),
                 ],
             );
             let _ = errors;
@@ -1794,9 +1803,142 @@ pub fn bottom_panel(app: &mut App, ui: &mut Ui) {
                 .show(ui, |ui| match app.bottom_tab {
                     BottomTab::Console => console(app, ui),
                     BottomTab::Problems => problems(app, ui),
+                    BottomTab::Server => server_console(app, ui),
                 });
         });
     app.ui_rects.insert("bottom", resp.response.rect);
+}
+
+/// Live console of the server the project uploads to (polled every few seconds).
+fn server_console(app: &mut App, ui: &mut Ui) {
+    let ctx = ui.ctx().clone();
+    let Some(cfg) = app
+        .settings
+        .server(app.project.settings.deploy_server)
+        .filter(|s| s.ready())
+        .cloned()
+    else {
+        ui.label(
+            RichText::new(t(
+                "Für dieses Projekt ist kein Server ausgewählt. Wähle einen unter „Bauen & Export“ → „Server“, dann siehst du hier seine Konsole.",
+                "No server is picked for this project. Pick one under “Build & export” → “Server”, then you see its console here.",
+            ))
+            .color(theme::TEXT_WEAK),
+        );
+        if ui.button(t("Server verbinden…", "Connect a server…")).clicked() {
+            crate::ui::settings::open(app, crate::ui::settings::Tab::Servers);
+        }
+        return;
+    };
+    let now = ctx.input(|i| i.time);
+    let sc = &mut app.server_console;
+    // Results of background requests.
+    if let Some(rx) = &sc.rx {
+        if let Ok(r) = rx.try_recv() {
+            sc.rx = None;
+            match r {
+                Ok(text) => {
+                    sc.text = crate::server::strip_ansi(&text);
+                    sc.error = None;
+                }
+                Err(e) => sc.error = Some(e),
+            }
+        }
+    }
+    if let Some(rx) = &sc.action_rx {
+        if let Ok(r) = rx.try_recv() {
+            sc.action_rx = None;
+            sc.status = match r {
+                Ok(s) => s,
+                Err(e) => format!("✖ {e}"),
+            };
+            sc.last_poll = 0.0;
+        }
+    }
+    if sc.rx.is_none() && now - sc.last_poll > 3.0 {
+        sc.last_poll = now;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (c, ctx2) = (cfg.clone(), ctx.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::server::fetch_logs(&c, 300));
+            ctx2.request_repaint();
+        });
+        sc.rx = Some(rx);
+    }
+    ctx.request_repaint_after(std::time::Duration::from_millis(500));
+
+    let mut action: Option<(&'static str, String)> = None;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(cfg.display_name()).strong());
+        for (act, label) in [
+            ("start", t("Starten", "Start")),
+            ("restart", t("Neu starten", "Restart")),
+            ("stop", t("Stoppen", "Stop")),
+        ] {
+            if ui.small_button(label).clicked() {
+                action = Some(("power", act.to_string()));
+            }
+        }
+        if !sc.status.is_empty() {
+            ui.label(RichText::new(&sc.status).size(11.5).color(theme::TEXT_WEAK));
+        }
+        if let Some(e) = &sc.error {
+            ui.label(RichText::new(e).size(11.5).color(theme::RED));
+        }
+    });
+    let h = (ui.available_height() - 34.0).max(40.0);
+    egui::Frame::new()
+        .fill(theme::INPUT_BG)
+        .corner_radius(4)
+        .inner_margin(6)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            egui::ScrollArea::vertical()
+                .max_height(h)
+                .auto_shrink([false, false])
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    if sc.text.is_empty() {
+                        ui.label(RichText::new(t("Lade Konsole…", "Loading console…")).color(theme::TEXT_WEAK));
+                    }
+                    for line in sc.text.lines() {
+                        let col = if line.contains("ERROR") || line.contains("Exception") || line.trim_start().starts_with("at ") {
+                            theme::RED
+                        } else if line.contains("WARN") {
+                            theme::YELLOW
+                        } else if line.contains("[Debug]") {
+                            theme::ACCENT
+                        } else {
+                            theme::TEXT
+                        };
+                        ui.label(RichText::new(line).monospace().size(12.0).color(col));
+                    }
+                });
+        });
+    ui.horizontal(|ui| {
+        let te = ui.add(
+            egui::TextEdit::singleline(&mut sc.input)
+                .hint_text(t("Befehl an den Server, z. B. say Hallo", "Command for the server, e.g. say Hello"))
+                .desired_width(ui.available_width() - 90.0),
+        );
+        let enter = te.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if (ui.button(t("Senden", "Send")).clicked() || enter) && !sc.input.trim().is_empty() {
+            action = Some(("command", std::mem::take(&mut sc.input)));
+        }
+    });
+    if let Some((kind, value)) = action {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let r = if kind == "power" {
+                crate::server::power(&cfg, &value).map(|_| format!("✔ {value}"))
+            } else {
+                crate::server::send_command(&cfg, &value).map(|_| format!("✔ /{}", value.trim_start_matches('/')))
+            };
+            let _ = tx.send(r);
+            ctx.request_repaint();
+        });
+        sc.action_rx = Some(rx);
+    }
 }
 
 fn console(app: &mut App, ui: &mut Ui) {

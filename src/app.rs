@@ -83,6 +83,20 @@ pub enum RightTab {
 pub enum BottomTab {
     Console,
     Problems,
+    Server,
+}
+
+/// Console of the project's game server, shown in the bottom panel.
+#[derive(Default)]
+pub struct ServerConsole {
+    pub text: String,
+    pub error: Option<String>,
+    pub rx: Option<Receiver<Result<String, String>>>,
+    pub last_poll: f64,
+    pub input: String,
+    /// Result of the last command / power action.
+    pub action_rx: Option<Receiver<Result<String, String>>>,
+    pub status: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -147,6 +161,11 @@ pub enum Dialog {
     },
     Updates,
     Settings,
+    /// Search & replace in all texts of the project.
+    Replace {
+        find: String,
+        with: String,
+    },
 }
 
 /// State of the updater.
@@ -246,6 +265,7 @@ pub struct App {
     pub recipe_edit: Option<(usize, NodeId)>,
     /// "Reason (screen)" block being edited: (workspace, node).
     pub screen_edit: Option<(usize, NodeId)>,
+    pub server_console: ServerConsole,
     /// Test mode run, if shown.
     pub trace: Option<crate::ui::trace::Trace>,
     pub item_picker: Option<crate::ui::menu_editor::ItemPicker>,
@@ -317,6 +337,7 @@ impl App {
             menu_edit: None,
             recipe_edit: None,
             trace: None,
+            server_console: ServerConsole::default(),
             screen_edit: None,
             item_picker: None,
             allow_close: false,
@@ -416,6 +437,7 @@ impl App {
             if self.pack.info.is_some() || force {
                 self.pack = PackCache::default();
                 crate::resourcepack::set_known_models(vec![]);
+                crate::resourcepack::set_known_sounds(vec![]);
             }
             return;
         }
@@ -429,6 +451,9 @@ impl App {
             info.as_ref()
                 .map(|i| i.item_models.clone())
                 .unwrap_or_default(),
+        );
+        crate::resourcepack::set_known_sounds(
+            info.as_ref().map(|i| i.sounds.clone()).unwrap_or_default(),
         );
         // Thumbnails stay valid as long as the pack files are the same.
         let same_files = self.pack.key.as_ref().map(|k| &k.0) == Some(&key.0) && !force;
@@ -1142,6 +1167,51 @@ impl App {
             );
         }
         id
+    }
+
+    /// Texts of all blocks that contain `find`: count of occurrences.
+    pub fn count_text(&self, find: &str) -> usize {
+        if find.is_empty() {
+            return 0;
+        }
+        self.project
+            .workspaces
+            .iter()
+            .flat_map(|w| w.nodes.iter())
+            .flat_map(|n| n.values.iter())
+            .filter(|(k, _)| *k != "cmd")
+            .map(|(_, v)| v.matches(find).count())
+            .sum::<usize>()
+            + self
+                .project
+                .workspaces
+                .iter()
+                .flat_map(|w| w.notes.iter())
+                .map(|n| n.title.matches(find).count() + n.text.matches(find).count())
+                .sum::<usize>()
+    }
+
+    /// Replaces `find` in all block values and notes. Returns how many were replaced.
+    pub fn replace_text(&mut self, find: &str, with: &str) -> usize {
+        let n = self.count_text(find);
+        if n == 0 {
+            return 0;
+        }
+        for w in &mut self.project.workspaces {
+            for node in &mut w.nodes {
+                for (k, v) in node.values.iter_mut() {
+                    if k != "cmd" {
+                        *v = v.replace(find, with);
+                    }
+                }
+            }
+            for note in &mut w.notes {
+                note.title = note.title.replace(find, with);
+                note.text = note.text.replace(find, with);
+            }
+        }
+        self.log(Level::Done, format!("{n}× „{find}“ durch „{with}“ ersetzt"));
+        n
     }
 
     pub fn delete_selection(&mut self) {

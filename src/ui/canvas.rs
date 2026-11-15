@@ -1257,6 +1257,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             let searchable = !is_conn
                 && pin.ty == PinType::Text
                 && matches!(&*pin.id, "item" | "block");
+            let is_sound = !is_conn && pin.ty == PinType::Text && &*pin.id == "sound";
             let r = row(&mut nui, |ui| {
                 row_label(
                     ui,
@@ -1277,9 +1278,44 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                         &pin.id,
                         pin.default,
                         &mut node.values,
-                        if searchable { edit_w - 26.0 } else { edit_w },
+                        if searchable || is_sound { edit_w - 26.0 } else { edit_w },
                         ("p", nid, pin.id.clone()),
                     );
+                    if is_sound {
+                        ui.menu_button("♪", |ui| {
+                            let pack = crate::resourcepack::known_sounds();
+                            if !pack.is_empty() {
+                                ui.label(egui::RichText::new(t("Aus deinem Resourcepack", "From your resource pack")).size(11.0).color(theme::TEXT_WEAK));
+                                for s in &pack {
+                                    if ui.button(s).clicked() {
+                                        node.values.insert(pin.id.to_string(), s.clone());
+                                        ui.close();
+                                    }
+                                }
+                                ui.separator();
+                            }
+                            ui.label(egui::RichText::new(t("Beliebte Sounds", "Popular sounds")).size(11.0).color(theme::TEXT_WEAK));
+                            for s in [
+                                "entity.experience_orb.pickup",
+                                "entity.player.levelup",
+                                "block.note_block.pling",
+                                "block.note_block.bass",
+                                "entity.villager.no",
+                                "entity.villager.yes",
+                                "entity.enderman.teleport",
+                                "block.anvil.land",
+                                "ui.button.click",
+                                "entity.firework_rocket.launch",
+                                "block.chest.open",
+                                "entity.ender_dragon.growl",
+                            ] {
+                                if ui.button(s).clicked() {
+                                    node.values.insert(pin.id.to_string(), s.to_string());
+                                    ui.close();
+                                }
+                            }
+                        });
+                    }
                     if searchable
                         && crate::ui::icons::icon_button(
                             ui,

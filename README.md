@@ -21,6 +21,13 @@ Komplett in **Rust** geschrieben (egui), läuft als einzelne **`.exe` unter Wind
   - **Fabric**: Texturen und Modelle werden direkt in den Mod eingebaut.
   - Blöcke: **„Eigenes Item geben“**, **„Rechtsklick mit eigenem Item“**, **„Modell des Items ändern“**, **„Eigenes Item anziehen / fallen lassen“**, **„Eigene Items zählen / abziehen“**, **„Resourcepack-Status“**, **„Resourcepack senden / entfernen“**. Fehlende `items/*.json`-Definitionen werden automatisch erzeugt.
 - **Menü-Editor**: Der Block „Menü öffnen“ hat den Knopf **„Menü bearbeiten“**. Im Editor stellst du Reihen und Titel ein und siehst die Kiste **wie in Minecraft**. Klick auf einen Platz öffnet die **Item-Suche über alle 1500 Items und Blöcke**; pro Platz gibt es Name, Beschreibung, Anzahl, eigenes Modell und den Schalter **„Kann herausgenommen werden“**. Items lassen sich per Ziehen verschieben. Jeder Platz kann eine **ID** bekommen; der Block „Klick im Menü“ reagiert dann nur auf dieses Item.
+- **Bann-System**: Blöcke „Bannen“ (Minuten/Stunden/Tage/für immer), „Entbannen“, „Ist gebannt?“ und „Grund (Bildschirm)“ mit Kategorien. Der Bildschirm-Editor zeigt den „Verbindung getrennt“-Bildschirm wie in Minecraft; `{time}` wird zur Restzeit, `{player}` zum Namen. Der Grund lässt sich mit „Bannen“ oder „Kicken“ verbinden.
+- **Variablen & Listen**: Werte bis zum Server-Stopp merken, hochzählen, Listen füllen und mit „Für jeden Eintrag“ durchgehen.
+- **Countdown** pro Spieler mit Abbrechen, **eigene Blöcke** (Ablauf unter einem Namen, von überall ausführbar), **Nachrichten aus messages.yml**.
+- **Mehr Events**: Block angeklickt, Spieler bewegt sich, Bereich betreten/verlassen, schleichen, springen, Welt gewechselt, Respawn, Item aufgehoben/weggeworfen, NPC angeklickt.
+- **Hologramme & NPCs**, **Geld** (Kontostand, geben, abziehen), **Rang-Präfix und Berechtigungen**.
+- **Server-Konsole in der App** (Reiter unten): zeigt die Konsole des verbundenen Calagopus-Servers, sendet Befehle, startet/stoppt ihn.
+- **Suchen & Ersetzen** im ganzen Projekt (Bearbeiten-Menü) und **Sound-Auswahl** (♪) mit den Sounds deines Resourcepacks.
 - **Klick-Aktionen ohne Kabel**: Im Menü-Editor stellst du pro Platz ein, was ein Klick macht – Menü schließen, anderes Menü öffnen, Befehl als Spieler/Konsole, Nachricht, Position speichern, zu gespeicherter Position oder zu einem Warp teleportieren.
 - **Menü-Seiten**: „Weitere Seite anlegen“ erstellt ein zweites Menü und setzt die Vor-/Zurück-Pfeile automatisch.
 - **Menü-Namen zum Auswählen** bei „Klick im Menü“, „Menü ersetzen“ und „Menü zurücksetzen“; passt ein Name zu keinem Menü, gibt es eine Warnung.
@@ -34,11 +41,11 @@ Komplett in **Rust** geschrieben (egui), läuft als einzelne **`.exe` unter Wind
 - **Server-Upload**: Unter Einstellungen → Server die Adresse deines **Calagopus-Panels** eingeben – der Browser öffnet die Seite „API-Key erstellen“, der kopierte Key wird automatisch übernommen, dann nur noch den Server wählen. Nach jedem Build landet die `.jar` automatisch in `plugins/` bzw. `mods/` (alte Versionen werden entfernt; optional Neustart oder Konsolenbefehl danach).
 - **Einstellungen** (Zahnrad unten links, immer sichtbar): Sprache, Größe der Oberfläche, Block-Beschreibungen, Typ-Marken, Block-Nummern, Raster, Item-Bilder, Server, Updates.
 - **Erklärungen an jedem Sockel**: Mit der Maus über einen Ein- oder Ausgang (z. B. „Spieler“) gehen zeigt, was er macht, welchen Typ er hat und was hineinpasst.
-- **Vorlagen je nach Plattform**: 14 Vorlagen für Plugins, 10 für Mods – u. a. /sethome & /home, mehrere Homes mit /homes, Home-Menü, Warp-Menü, Shop-Menü, Einstellungs-Datei, Zauberstab, Spawn-Schutz.
+- **Vorlagen je nach Plattform**: 15 Vorlagen für Plugins, 10 für Mods – u. a. /sethome & /home, mehrere Homes mit /homes, Home-Menü, Warp-Menü, Shop-Menü, Einstellungs-Datei, Zauberstab, Spawn-Schutz.
 - **Zwei Plattformen** aus demselben Projekt:
   - **Paper-Plugin** (Minecraft 26.x und 1.21.11) – für Server, Spieler brauchen nichts zu installieren.
   - **Fabric-Mod** (Minecraft 26.x) – für Fabric-Server oder Einzelspieler.
-- **132 Blöcke** in 14 Kategorien – jeder Block zeigt eine Kurzbeschreibung, seinen Typ (Event/Aktion/Wert) und farbige Typ-Marken. U. a. **Inventar-Menüs** (Shops/Teleporter mit „Klick im Menü“), **Cooldown**, **Bossbar**, **Scoreboard-Seitenleiste**, **Tab-Liste**, Fliegen erlauben, Items zählen/abziehen, Wetter, „Spieler tötet Mob“, Entfernung, Zufallsspieler, Text ersetzen. Selten gebrauchte Eingänge sind am Block unter „weitere Optionen“ eingeklappt.
+- **167 Blöcke** in 16 Kategorien – jeder Block zeigt eine Kurzbeschreibung, seinen Typ (Event/Aktion/Wert) und farbige Typ-Marken. U. a. **Inventar-Menüs** (Shops/Teleporter mit „Klick im Menü“), **Cooldown**, **Bossbar**, **Scoreboard-Seitenleiste**, **Tab-Liste**, Fliegen erlauben, Items zählen/abziehen, Wetter, „Spieler tötet Mob“, Entfernung, Zufallsspieler, Text ersetzen. Selten gebrauchte Eingänge sind am Block unter „weitere Optionen“ eingeklappt.
 - **Ein Klick auf „▶ Bauen“ (F5)** erzeugt die fertige `.jar` – inklusive Gradle-Projekt, das auch in IntelliJ/VS Code weiterbearbeitet werden kann.
 - **Live-Java-Vorschau**, **Probleme-Liste** mit Sprung zum Block, Konsole mit Filtern.
 

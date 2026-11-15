@@ -363,6 +363,57 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 close = true;
             }
         }
+        Dialog::Replace { find, with } => {
+            let n = app.count_text(find);
+            let mut go = false;
+            let r = egui::Modal::new(egui::Id::unique("dlg_replace"))
+                .frame(dialog_frame())
+                .show(ctx, |ui| {
+                    ui.set_width(460.0);
+                    ui.label(RichText::new(t("Suchen & Ersetzen", "Search & replace")).size(18.0).strong());
+                    ui.label(
+                        RichText::new(t(
+                            "Sucht in allen Texten und Werten aller Blöcke und Notizen des Projekts.",
+                            "Searches all texts and values of all blocks and notes of the project.",
+                        ))
+                        .size(11.5)
+                        .color(theme::TEXT_WEAK),
+                    );
+                    ui.add_space(8.0);
+                    ui.label(RichText::new(t("Suchen nach", "Search for")).color(theme::TEXT_WEAK));
+                    ui.add(egui::TextEdit::singleline(find).desired_width(f32::INFINITY));
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(t("Ersetzen durch", "Replace with")).color(theme::TEXT_WEAK));
+                    ui.add(egui::TextEdit::singleline(with).desired_width(f32::INFINITY));
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new(format!("{n} {}", t("Treffer", "matches"))).color(if n > 0 {
+                            theme::GREEN
+                        } else {
+                            theme::TEXT_WEAK
+                        }),
+                    );
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(n > 0, primary(t("Alle ersetzen", "Replace all")))
+                            .clicked()
+                        {
+                            go = true;
+                        }
+                        if ui.button(t("Schließen", "Close")).clicked() {
+                            close = true;
+                        }
+                    });
+                });
+            if r.should_close() {
+                close = true;
+            }
+            if go {
+                let (f, w) = (find.clone(), with.clone());
+                app.replace_text(&f, &w);
+            }
+        }
         Dialog::Settings => {
             crate::ui::settings::show(app, ctx, &mut close);
         }
