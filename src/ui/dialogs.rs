@@ -349,6 +349,43 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 return;
             }
         }
+        Dialog::ConfirmQuit => {
+            let mut choice = None;
+            let r = egui::Modal::new(egui::Id::unique("dlg_quit"))
+                .frame(dialog_frame())
+                .show(ctx, |ui| {
+                    ui.set_width(380.0);
+                    ui.label(
+                        RichText::new(t("Minecraft Builder beenden?", "Quit Minecraft Builder?"))
+                            .size(18.0)
+                            .strong(),
+                    );
+                    ui.add_space(6.0);
+                    ui.label(t(
+                        "Dein Projekt ist gespeichert. Möchtest du es vor dem Beenden noch einmal speichern?",
+                        "Your project is saved. Do you want to save it once more before quitting?",
+                    ));
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        if ui.add(primary(t("Speichern & beenden", "Save & quit"))).clicked() {
+                            choice = Some(true);
+                        }
+                        if ui.button(t("Beenden", "Quit")).clicked() {
+                            choice = Some(false);
+                        }
+                        if ui.button(t("Abbrechen", "Cancel")).clicked() {
+                            close = true;
+                        }
+                    });
+                });
+            if r.should_close() {
+                close = true;
+            }
+            if let Some(save) = choice {
+                app.resolve_dialog_after_save(crate::app::AfterSave::Quit, save, ctx);
+                return;
+            }
+        }
         Dialog::RenameWorkspace { index, name } => {
             let mut ok = false;
             let r = egui::Modal::new(egui::Id::unique("dlg_rename"))

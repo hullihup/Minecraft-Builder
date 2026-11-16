@@ -216,6 +216,8 @@ pub enum Dialog {
     UnsavedChanges {
         then: AfterSave,
     },
+    /// Window X pressed while the project is already saved.
+    ConfirmQuit,
     About,
     RenameWorkspace {
         index: usize,
@@ -1017,6 +1019,7 @@ impl App {
     fn after_save(&mut self, then: AfterSave, ctx: &egui::Context) {
         match then {
             AfterSave::Quit => {
+                self.settings.save();
                 self.allow_close = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
@@ -1754,10 +1757,15 @@ impl App {
 
     fn handle_close(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
-            if self.dirty() && self.screen == Screen::Editor {
+            if self.screen == Screen::Editor {
+                // Always ask in the editor: save / don't save / cancel.
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                self.dialog = Dialog::UnsavedChanges {
-                    then: AfterSave::Quit,
+                self.dialog = if self.dirty() || self.path.is_none() {
+                    Dialog::UnsavedChanges {
+                        then: AfterSave::Quit,
+                    }
+                } else {
+                    Dialog::ConfirmQuit
                 };
             } else {
                 self.settings.save();
