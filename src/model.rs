@@ -78,9 +78,6 @@ pub struct ProjectSettings {
     /// Optional folder of a test server (plugins/ or mods/) the jar gets copied into.
     #[serde(default)]
     pub deploy_dir: String,
-    /// Also delete the plugin's data folder on the server after each build.
-    #[serde(default)]
-    pub deploy_clean: bool,
     /// Optional resource pack (textures/models) bundled into the plugin/mod.
     #[serde(default)]
     pub pack: PackSettings,
@@ -90,6 +87,10 @@ pub struct ProjectSettings {
     /// Plugin/mod tells OPs in chat which events run (for finding mistakes).
     #[serde(default)]
     pub debug: bool,
+    /// Delete the plugin's data folder (plugins/<Name>/ or config/<id>/) when the new jar
+    /// is uploaded or copied. Resets all saved data (homes, bans, money, …).
+    #[serde(default)]
+    pub wipe_data_on_deploy: bool,
 }
 
 /// One resource pack .zip of the project. Several packs are merged into one.
@@ -265,15 +266,24 @@ impl Default for ProjectSettings {
             platform: Platform::Paper,
             versions: Versions::default_for(Platform::Paper),
             deploy_dir: String::new(),
-            deploy_clean: false,
             pack: PackSettings::default(),
             deploy_server: 0,
             debug: false,
+            wipe_data_on_deploy: false,
         }
     }
 }
 
 impl ProjectSettings {
+    /// Data folder of the plugin/mod on a server, relative to the server root:
+    /// Paper `plugins/<name>` (from plugin.yml), Fabric `config/<id>`.
+    pub fn data_folder(&self) -> (&'static str, String) {
+        match self.platform {
+            Platform::Paper => ("plugins", self.name.replace(' ', "_")),
+            Platform::Fabric => ("config", self.id.clone()),
+        }
+    }
+
     /// Java class name of the main class.
     pub fn main_class(&self) -> String {
         let mut s = String::new();

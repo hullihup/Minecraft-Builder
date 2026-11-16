@@ -1,6 +1,6 @@
 [package]
 name = "minecraft-builder"
-version = "0.8.3"
+version = "0.8.4"
 edition = "2024"
 description = "Visual block editor for Minecraft plugins (Paper) and mods (Fabric)"
 license = "MIT"

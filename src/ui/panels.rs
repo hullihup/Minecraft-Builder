@@ -1345,6 +1345,31 @@ fn sidebar_build(app: &mut App, ui: &mut Ui) {
                 }
             });
         app.project.settings.deploy_server = pick;
+        if pick != 0 || !app.project.settings.deploy_dir.trim().is_empty() {
+            let (parent, name) = app.project.settings.data_folder();
+            ui.checkbox(
+                &mut app.project.settings.wipe_data_on_deploy,
+                format!(
+                    "{} {parent}/{name}/ {}",
+                    t("Beim Hochladen", "Delete"),
+                    t("löschen", "on upload")
+                ),
+            )
+            .on_hover_text(t(
+                "Löscht den Datenordner des Plugins (Einstellungen und gespeicherte Daten) bei jedem Build. Damit startet das Plugin wie neu – Homes, Warps, Bans, Geld und ersetzte Menüs sind dann weg.",
+                "Deletes the plugin's data folder (settings and saved data) on every build. The plugin starts fresh – homes, warps, bans, money and replaced menus are gone.",
+            ));
+            if app.project.settings.wipe_data_on_deploy {
+                ui.label(
+                    RichText::new(t(
+                        "Achtung: Alle gespeicherten Daten (Homes, Bans, Geld …) werden bei jedem Build gelöscht.",
+                        "Warning: all saved data (homes, bans, money …) is deleted on every build.",
+                    ))
+                    .size(11.0)
+                    .color(theme::YELLOW),
+                );
+            }
+        }
         if let Some(s) = app.settings.server(pick) {
             if !s.ready() {
                 ui.label(
@@ -1397,36 +1422,6 @@ fn sidebar_build(app: &mut App, ui: &mut Ui) {
             }
         }
     });
-    if !app.project.settings.deploy_dir.trim().is_empty() {
-        ui.add_space(4.0);
-        ui.label(
-            RichText::new(t(
-                "Ältere Versionen deiner .jar in diesem Ordner werden automatisch ersetzt.",
-                "Older versions of your jar in this folder are replaced automatically.",
-            ))
-            .size(11.0)
-            .color(theme::GREEN),
-        );
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            widgets::toggle(ui, &mut app.project.settings.deploy_clean);
-            ui.label(
-                RichText::new(t(
-                    "Plugin-Ordner dabei löschen",
-                    "Also delete the plugin folder",
-                ))
-                .size(12.0),
-            );
-        });
-        ui.label(
-            RichText::new(t(
-                "Löscht nach jedem Build den Daten-Ordner des Plugins auf dem Server (config.yml und gespeicherte Daten), damit alles frisch angelegt wird.",
-                "Deletes the plugin's data folder on the server after each build (config.yml and stored data), so everything is created fresh.",
-            ))
-            .size(11.0)
-            .color(theme::TEXT_WEAK),
-        );
-    }
     if let Some(path) = &app.path {
         ui.add_space(10.0);
         let dir = crate::build::export_dir(path, &app.project);

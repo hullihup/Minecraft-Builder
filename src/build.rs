@@ -156,6 +156,15 @@ fn run(
     );
     let started = std::time::Instant::now();
 
+    // Old builds (e.g. of an earlier version number) would otherwise stay in build/libs.
+    if let Ok(entries) = std::fs::read_dir(dir.join("build/libs")) {
+        for e in entries.flatten() {
+            if e.path().extension().is_some_and(|x| x == "jar") {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+
     let mut cmd = if cfg!(windows) {
         let mut c = Command::new("cmd");
         c.arg("/C").arg("gradlew.bat");
@@ -226,7 +235,68 @@ fn run(
         ),
     );
     if !project.settings.deploy_dir.trim().is_empty() {
-        deploy(project, &jar, tx);
+        let target_dir = PathBuf::from(project.settings.deploy_dir.trim());
+        let target = target_dir.join(jar.file_name().unwrap());
+        match std::fs::create_dir_all(&target_dir).and_then(|_| std::fs::copy(&jar, &target)) {
+            Ok(_) => {
+                send(
+                    tx,
+                    Level::Done,
+                    format!("Kopiert nach {}", target.display()),
+                );
+                // Remove older versions of this plugin, otherwise the server loads it twice.
+                let new_name = target
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                let mut removed = vec![];
+                if let Ok(entries) = std::fs::read_dir(&target_dir) {
+                    for e in entries.flatten() {
+                        let n = e.file_name().to_string_lossy().to_string();
+                        if is_old_build(&n, &project.settings.id, &new_name)
+                            && std::fs::remove_file(e.path()).is_ok()
+                        {
+                            removed.push(n);
+                        }
+                    }
+                }
+                if !removed.is_empty() {
+                    send(
+                        tx,
+                        Level::Info,
+                        format!("Alte Version entfernt: {}", removed.join(", ")),
+                    );
+                }
+                // Optionally delete the data folder of the local test server too.
+                if project.settings.wipe_data_on_deploy {
+                    let (parent, name) = project.settings.data_folder();
+                    let data = match project.settings.platform {
+                        Platform::Paper => Some(target_dir.join(&name)),
+                        Platform::Fabric => target_dir.parent().map(|d| d.join(parent).join(&name)),
+                    };
+                    if let Some(d) = data.filter(|d| d.is_dir() && !name.trim().is_empty()) {
+                        match std::fs::remove_dir_all(&d) {
+                            Ok(()) => send(
+                                tx,
+                                Level::Info,
+                                format!("Datenordner gelöscht: {}", d.display()),
+                            ),
+                            Err(e) => send(
+                                tx,
+                                Level::Warn,
+                                format!("Datenordner {} nicht gelöscht: {e}", d.display()),
+                            ),
+                        }
+                    }
+                }
+            }
+            Err(e) => send(
+                tx,
+                Level::Warn,
+                format!("Kopieren nach {} fehlgeschlagen: {e}", target_dir.display()),
+            ),
+        }
     }
     if let Some(server) = server {
         send(
@@ -242,7 +312,12 @@ fn run(
             Platform::Paper => "plugins",
             Platform::Fabric => "mods",
         };
-        match crate::server::deploy(server, &jar, folder, &project.settings.id) {
+        let (data_parent, data_name) = project.settings.data_folder();
+        let wipe = project
+            .settings
+            .wipe_data_on_deploy
+            .then_some((data_parent, data_name.as_str()));
+        match crate::server::deploy(server, &jar, folder, &project.settings.id, wipe) {
             Ok(lines) => {
                 for l in lines {
                     send(tx, Level::Done, l);
@@ -252,115 +327,6 @@ fn run(
         }
     }
     Ok(jar)
-}
-
-/// Copies the jar into the server folder, replacing older jars of the same plugin/mod.
-fn deploy(project: &Project, jar: &Path, tx: &Sender<Msg>) {
-    let s = &project.settings;
-    let target_dir = PathBuf::from(s.deploy_dir.trim());
-    if let Err(e) = std::fs::create_dir_all(&target_dir) {
-        send(tx, Level::Warn, format!("{}: {e}", target_dir.display()));
-        return;
-    }
-    let name = jar.file_name().unwrap().to_string_lossy().to_string();
-    // Remove older versions (e.g. meinplugin-1.0.0.jar when 1.1.0 is built).
-    let prefix = format!("{}-", s.id);
-    if let Ok(rd) = std::fs::read_dir(&target_dir) {
-        for e in rd.filter_map(|e| e.ok()) {
-            let n = e.file_name().to_string_lossy().to_string();
-            let rest = n.strip_prefix(&prefix).and_then(|r| r.strip_suffix(".jar"));
-            let is_version = rest
-                .map(|r| {
-                    r.chars()
-                        .next()
-                        .map(|c| c.is_ascii_digit())
-                        .unwrap_or(false)
-                })
-                .unwrap_or(false);
-            if is_version && n != name && std::fs::remove_file(e.path()).is_ok() {
-                send(
-                    tx,
-                    Level::Info,
-                    format!(
-                        "{} {n}",
-                        crate::i18n::t("Alte Version entfernt:", "Removed old version:")
-                    ),
-                );
-            }
-        }
-    }
-    let target = target_dir.join(&name);
-    match std::fs::copy(jar, &target) {
-        Ok(_) => send(
-            tx,
-            Level::Done,
-            format!(
-                "{} {}",
-                crate::i18n::t("Auf den Server kopiert:", "Copied to the server:"),
-                target.display()
-            ),
-        ),
-        Err(e) => {
-            send(
-                tx,
-                Level::Warn,
-                format!(
-                    "{} ({e}). {}",
-                    crate::i18n::t(
-                        "Die .jar konnte nicht ersetzt werden",
-                        "The jar could not be replaced"
-                    ),
-                    crate::i18n::t(
-                        "Läuft der Server noch? Stoppe ihn und baue erneut.",
-                        "Is the server still running? Stop it and build again."
-                    )
-                ),
-            );
-            return;
-        }
-    }
-    if s.deploy_clean {
-        // Data folder of the plugin / config of the mod.
-        let folders: Vec<PathBuf> = match s.platform {
-            Platform::Paper => vec![target_dir.join(s.name.replace(' ', "_"))],
-            Platform::Fabric => match target_dir.parent() {
-                Some(root) => vec![
-                    root.join("config").join(&s.id),
-                    root.join("config").join(format!("{}.properties", s.id)),
-                ],
-                None => vec![],
-            },
-        };
-        for f in folders {
-            let r = if f.is_dir() {
-                std::fs::remove_dir_all(&f)
-            } else if f.is_file() {
-                std::fs::remove_file(&f)
-            } else {
-                continue;
-            };
-            match r {
-                Ok(()) => send(
-                    tx,
-                    Level::Info,
-                    format!(
-                        "{} {}",
-                        crate::i18n::t("Gelöscht:", "Deleted:"),
-                        f.display()
-                    ),
-                ),
-                Err(e) => send(tx, Level::Warn, format!("{}: {e}", f.display())),
-            }
-        }
-    }
-    send(
-        tx,
-        Level::Info,
-        crate::i18n::t(
-            "Starte den Server neu (oder /reload confirm), damit die neue Version läuft.",
-            "Restart the server (or /reload confirm) to run the new version.",
-        ),
-    );
 }
 
 fn pump<R: BufRead>(r: R, tx: &Sender<Msg>, is_err: bool) {
@@ -384,6 +350,17 @@ fn pump<R: BufRead>(r: R, tx: &Sender<Msg>, is_err: bool) {
         };
         let _ = tx.send(Msg::Line(lvl, l.to_string()));
     }
+}
+
+/// Is `name` an older build of the project `id` (`<id>-<version>.jar`), not `new_name`?
+/// The version must start with a digit, so "home-extra-1.0.jar" is not taken for "home".
+pub fn is_old_build(name: &str, id: &str, new_name: &str) -> bool {
+    let Some(rest) = name.strip_prefix(&format!("{id}-")) else {
+        return false;
+    };
+    name != new_name
+        && name.ends_with(".jar")
+        && rest.chars().next().is_some_and(|c| c.is_ascii_digit())
 }
 
 fn find_jar(libs: &Path) -> Option<PathBuf> {
@@ -688,5 +665,23 @@ impl AppSettings {
         self.recent.retain(|r| r != p);
         self.recent.insert(0, p.to_path_buf());
         self.recent.truncate(8);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finds_old_builds_only_of_this_project() {
+        assert!(is_old_build("home-1.0.0.jar", "home", "home-1.1.0.jar"));
+        assert!(!is_old_build("home-1.1.0.jar", "home", "home-1.1.0.jar"));
+        assert!(!is_old_build(
+            "home-extra-1.0.jar",
+            "home",
+            "home-1.1.0.jar"
+        ));
+        assert!(!is_old_build("homes-1.0.jar", "home", "home-1.1.0.jar"));
+        assert!(!is_old_build("home-1.0.txt", "home", "home-1.1.0.jar"));
     }
 }
