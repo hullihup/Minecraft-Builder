@@ -297,6 +297,7 @@ pub fn deploy(
     jar: &Path,
     folder: &str,
     project_id: &str,
+    wipe_data: Option<(&str, &str)>,
 ) -> Result<Vec<String>, String> {
     if !cfg.ready() {
         return Err(crate::i18n::t(
@@ -331,13 +332,12 @@ pub fn deploy(
         &format!("{base}/files/list?directory={}", urlencode(&dir)),
         key,
     ) {
-        let prefix = format!("{project_id}-");
         let old: Vec<String> = v["entries"]["data"]
             .as_array()
             .map(|a| {
                 a.iter()
                     .filter_map(|e| e["name"].as_str())
-                    .filter(|n| n.starts_with(&prefix) && n.ends_with(".jar") && *n != file_name)
+                    .filter(|n| crate::build::is_old_build(n, project_id, &file_name))
                     .map(str::to_string)
                     .collect()
             })
@@ -351,6 +351,18 @@ pub fn deploy(
             .is_ok()
         {
             log.push(format!("Alte Version entfernt: {}", old.join(", ")));
+        }
+    }
+
+    // Optionally delete the plugin's data folder (settings and saved data) as well.
+    if let Some((parent, name)) = wipe_data.filter(|(_, n)| !n.trim().is_empty()) {
+        match post(
+            &format!("{base}/files/delete"),
+            key,
+            &serde_json::json!({ "root": format!("/{parent}"), "files": [name] }),
+        ) {
+            Ok(()) => log.push(format!("Datenordner gelöscht: /{parent}/{name}")),
+            Err(e) => log.push(format!("Datenordner /{parent}/{name} nicht gelöscht (gibt es ihn?): {e}")),
         }
     }
 
@@ -634,7 +646,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let jar = dir.join("meinplugin-1.0.0.jar");
         std::fs::write(&jar, b"JARDATA").unwrap();
-        let (base, h) = mock_panel(6);
+        let (base, h) = mock_panel(7);
         let cfg = ServerConfig {
             id: 1,
             url: base,
@@ -644,7 +656,7 @@ mod tests {
             after: AfterUpload::Restart,
             ..Default::default()
         };
-        let log = deploy(&cfg, &jar, "plugins", "meinplugin").unwrap();
+        let log = deploy(&cfg, &jar, "plugins", "meinplugin", Some(("plugins", "Mein_Plugin"))).unwrap();
         let seen = h.join().unwrap();
         let lines: Vec<&str> = seen.iter().map(|s| s.0.as_str()).collect();
         assert!(lines[0].starts_with("POST /api/client/servers/1111-2222/files/create-directory"));
@@ -653,12 +665,16 @@ mod tests {
         assert!(lines[2].starts_with("POST /api/client/servers/1111-2222/files/delete"));
         let del = String::from_utf8_lossy(&seen[2].2).to_string();
         assert!(del.contains("meinplugin-0.9.jar") && !del.contains("anderes.jar"), "{del}");
-        assert!(lines[3].starts_with("GET /api/client/servers/1111-2222/files/upload"));
-        assert!(lines[4].starts_with("POST /upload/file?token=abc&directory=%2Fplugins"));
-        let up = String::from_utf8_lossy(&seen[4].2).to_string();
+        // The data folder plugins/Mein_Plugin is deleted too.
+        assert!(lines[3].starts_with("POST /api/client/servers/1111-2222/files/delete"));
+        let data = String::from_utf8_lossy(&seen[3].2).to_string();
+        assert!(data.contains("\"root\":\"/plugins\"") && data.contains("Mein_Plugin"), "{data}");
+        assert!(lines[4].starts_with("GET /api/client/servers/1111-2222/files/upload"));
+        assert!(lines[5].starts_with("POST /upload/file?token=abc&directory=%2Fplugins"));
+        let up = String::from_utf8_lossy(&seen[5].2).to_string();
         assert!(up.contains("filename=\"meinplugin-1.0.0.jar\"") && up.contains("JARDATA"));
-        assert!(lines[5].starts_with("POST /api/client/servers/1111-2222/power"));
-        assert!(String::from_utf8_lossy(&seen[5].2).contains("restart"));
-        assert_eq!(log.len(), 3, "{log:?}");
+        assert!(lines[6].starts_with("POST /api/client/servers/1111-2222/power"));
+        assert!(String::from_utf8_lossy(&seen[6].2).contains("restart"));
+        assert_eq!(log.len(), 4, "{log:?}");
     }
 }
