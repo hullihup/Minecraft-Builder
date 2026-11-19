@@ -1,0 +1,9 @@
+{
+  "pack": {
+    "pack_format": 34,
+    "supported_formats": { "min_inclusive": 18, "max_inclusive": 200 },
+    "min_format": 18,
+    "max_format": 200,
+    "description": "§eHullihup§7 – Herzen mit meinem Skin"
+  }
+}
